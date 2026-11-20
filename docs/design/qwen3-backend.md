@@ -21,8 +21,9 @@ crates against 44 for the default build. Each crate offers a license
 allowed by [`deny.toml`](../../deny.toml), mostly MIT or Apache-2.0, and the
 advisory supply-chain workflow runs `cargo deny check` on both graphs. The
 only advisory is RUSTSEC-2024-0436: `paste` is unmaintained and arrives as a
-compile-time proc-macro through Candle's `gemm`. `deny.toml` records the
-reasoning, pending maintainer acceptance. None of the crates compiles C or
+compile-time proc-macro through Candle's `gemm`. The maintainer approved
+that exception on 20 November 2026; `deny.toml` records where `paste` is
+used, why it was accepted and when to re-evaluate. None of the crates compiles C or
 C++ code or downloads anything at build or run time. Candle runs on CPU in FP32; its
 CUDA and Metal features stay off.
 
@@ -246,6 +247,17 @@ storage hosts.
 
 Resolved on 20 November 2026:
 
+- **Fetcher policies (approved):** the `deny.toml` exceptions for `ureq`,
+  `rustls` and `ring` by parent and the scoped `webpki-roots`
+  CDLA-Permissive-2.0 license exception; restart-only retry with a long
+  startup probe; and trimming the redirect allowlist after the first bundle
+  is published. The last is a step of the README's publishing procedure:
+  confirm the Hugging Face CDN host (`cas-bridge.xethub.hf.co` for Xet
+  storage, `cdn-lfs*.hf.co` for LFS) and the GitHub release-asset host the
+  bundle actually redirects to, and trim the allowlist to them. Until then a
+  host outside the list fails closed.
+- **RUSTSEC-2024-0436 (`paste`):** the advisory exception is approved.
+
 - **Rerank instruction in Server:** resolved without a new hub decision, under
   accepted ADR 0029 (the Server owns instruction prefixes, including any rerank
   instruction). The Server binding's optional rerank `instruction` is sent as
@@ -265,7 +277,3 @@ Still open:
   Candle's Qwen3 model does not take; a Lens-owned model variant or a GPU
   build is a LENS-2 decision.
 - **Manifest canonical form and importer.** See the artifact design.
-- **Fetcher download hosts.** Confirm the Hugging Face CDN host (`cas-bridge.xethub.hf.co`
-  for Xet storage, `cdn-lfs*.hf.co` for LFS) and the GitHub release-asset
-  host that the first published bundle actually redirects to, and trim the
-  allowlist to them. A host outside the list fails closed.

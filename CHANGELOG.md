@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Record maintainer approvals of 20 November 2026: the RUSTSEC-2024-0436
+  (`paste`) advisory exception, with where it is used, why it was accepted
+  and its re-evaluation conditions in `deny.toml`; the `fetch` dependency
+  exceptions (`ureq`, `rustls` and `ring` by parent, and the
+  `webpki-roots` CDLA-Permissive-2.0 license exception); restart-only retry
+  of a failed startup fetch with a long startup probe; and trimming the
+  redirect allowlist after the first bundle is published, now a step of the
+  README publishing procedure.
 - Drop the `qwen3` image variant without the fetcher (maintainer decision of
   20 November 2026). The Dockerfile now accepts only an empty
   `LENS_FEATURES` (the reference image) or `qwen3,fetch` (the model image,
@@ -63,8 +71,8 @@
   list, denies every RustSec advisory, yanked crates, wildcard requirements,
   TLS stacks, HTTP clients and the C tokenizer backends, and allows only
   crates.io. One exception, RUSTSEC-2024-0436 for the compile-time `paste`
-  macro in the `qwen3` graph, is recorded with its reasoning and awaits
-  maintainer acceptance.
+  macro in the `qwen3` graph, is recorded with its reasoning (approved later
+  the same day; see above).
 - Add the optional `qwen3` cargo feature, off by default: Qwen3-Embedding-0.6B
   and Qwen3-Reranker-0.6B on Candle 0.11.1, CPU, FP32. Embedding uses
   last-token pooling and L2 normalization at 1,024 dimensions; reranking uses

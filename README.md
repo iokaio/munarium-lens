@@ -214,7 +214,8 @@ verifies and loads the directory as usual. This happens while the stages load,
 before Lens answers any request; it never happens during request handling. If
 the fetch or the verification fails, the stage stays `failed`, readiness
 returns 503 and the log names one category. Lens does not retry until it is
-restarted.
+restarted: retry is restart-only, and orchestrators should give the first
+start a long startup probe (maintainer-approved, 20 November 2026).
 
 In a container, use the `qwen3,fetch` image variant (see the
 [local walkthrough](docs/guides/local-development.md#model-container)) with a
@@ -229,9 +230,13 @@ volume keeps the bundle across restarts, so a restart makes no connection.
 - **Dependency policy.** The fetcher uses `ureq` 3.5.2 with `rustls` 0.23 (the
   `ring` provider) and the compiled-in `webpki-roots` trust store: no OpenSSL,
   no platform TLS. [`deny.toml`](deny.toml) allows exactly these crates, only
-  through their expected parents, as an exception the maintainer approved on
+  through their expected parents, with a scoped CDLA-Permissive-2.0 license
+  exception for `webpki-roots`; the maintainer approved these exceptions on
   20 November 2026 for these two locations only. The default reference build
-  and image contain none of them.
+  and image contain none of them. The `qwen3` graph's one advisory exception,
+  RUSTSEC-2024-0436 (`paste`, an unmaintained compile-time macro reached
+  through Candle's `gemm`), was also approved on 20 November 2026; its
+  reasoning and re-evaluation conditions are in `deny.toml`.
 
 ### Fetching a bundle by hand
 
@@ -272,6 +277,11 @@ agent without explicit authorization.
    Hugging Face commit and manifest digest in the release notes.
 6. Record the bundle, commit and digest in the
    [model runtime decision](docs/design/model-runtime.md) and the CHANGELOG.
+7. After publishing, confirm the observed redirect hosts and trim the
+   allowlist: fetch the new bundle from each location, note the hosts each
+   download actually redirects to, and remove any host in `src/fetch.rs`
+   (and its test) that neither location used (maintainer-approved,
+   20 November 2026).
 
 The weights keep their upstream license. Munarium Lens's own Apache-2.0 license
 covers this repository's code, not the model weights.

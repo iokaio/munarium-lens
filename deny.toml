@@ -35,8 +35,9 @@ allow = ["Apache-2.0"]
 
 # webpki-roots is Mozilla's CA root list compiled in as data, under the
 # permissive CDLA-Permissive-2.0 data license. Only the optional `fetch`
-# graph has it (maintainer decision of 20 November 2026, see [bans]). The
-# exception is scoped to this one crate rather than added to `allow`.
+# graph has it. Approved by the maintainer on 20 November 2026 (see
+# [bans]). The exception is scoped to this one crate rather than added to
+# `allow`.
 [[licenses.exceptions]]
 name = "webpki-roots"
 allow = ["CDLA-Permissive-2.0"]
@@ -47,20 +48,24 @@ allow = ["CDLA-Permissive-2.0"]
 # needs a reasoned entry in `ignore` with its revisit condition.
 yanked = "deny"
 ignore = [
-    # paste is unmaintained (RUSTSEC-2024-0436), with no fixed release. It is
-    # only in the optional `qwen3` graph: Candle's matrix-multiply crates
-    # (gemm 0.19.0, the latest release, and its gemm-* siblings) use it as a
-    # proc-macro for identifier concatenation (`cargo tree -i paste
-    # --features qwen3`). It runs inside the compiler at build time and
-    # contributes no runtime code, parses no request data and is absent from
-    # the default reference-only build and image.
+    # paste is unmaintained (RUSTSEC-2024-0436). APPROVED by the maintainer
+    # on 20 November 2026.
     #
-    # An UNMAINTAINED advisory, not a vulnerability. Proposed with the
-    # `qwen3` feature on 20 November 2026; pending maintainer acceptance.
+    # Where: only in the optional `qwen3` graph, as a compile-time proc-macro
+    # reached only through Candle's matrix-multiply crates (gemm 0.19.0, the
+    # latest release, and its gemm-* siblings), which use it for identifier
+    # concatenation (`cargo tree -i paste --features qwen3`). It is absent
+    # from the default reference-only graph, build and image.
     #
-    # Re-evaluate when: gemm or Candle replace paste (take that release),
-    # Lens uses paste directly, or any vulnerability advisory lands against
-    # paste (blocking).
+    # Why accepted: an UNMAINTAINED-crate advisory, not a vulnerability. It
+    # runs only inside the compiler at build time and is not linked into the
+    # binary as runtime code, so it parses no request data. There is no fixed
+    # release and no maintained alternative Lens could choose, because the
+    # latest gemm still depends on it.
+    #
+    # Re-evaluate when: any vulnerability advisory lands against paste
+    # (blocking), or gemm or Candle drop it (take that release). Lens must
+    # not use paste directly.
     "RUSTSEC-2024-0436",
 ]
 
@@ -96,6 +101,7 @@ deny = [
     #
     # Each crate is allowed only through its expected parent, and only in the
     # optional `fetch` feature graph; the default build has none of them.
+    # These exceptions are approved by the maintainer (20 November 2026).
     # ureq 3.5.2 with default features off and `rustls`: rustls 0.23 on the
     # ring provider with the compiled-in webpki-roots trust store.
     { crate = "ureq", wrappers = ["munarium-lens"] },

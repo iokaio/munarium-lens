@@ -195,7 +195,8 @@ persistent volume claim (kept across restarts) at `/var/cache/lens`, set
 listed in the [README](../../README.md#downloading), directly or through an
 HTTP `CONNECT` egress proxy set with `HTTPS_PROXY` and `NO_PROXY` (see the
 README for the accepted forms). A first start downloads about 1.2 GB per stage before readiness, so
-use a startup probe with enough time. The image trusts the Mozilla root
+use a startup probe with enough time. A failed fetch is retried only by
+restarting the container (the approved restart-only policy). The image trusts the Mozilla root
 certificates compiled into the binary (`webpki-roots`), not the base
 image's certificate store. The same image also serves bundles mounted
 read-only through `LENS_*_ARTIFACTS`; without bundle settings it makes no
