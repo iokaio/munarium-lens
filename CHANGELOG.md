@@ -17,7 +17,11 @@
 - Add a Dockerfile for the reference-only image: a static musl build on
   digest-pinned `rust:1.98.1-alpine` and `distroless/static-debian12:nonroot`
   bases, with no model runtime or weights.
-
+- Document the implemented LENS-1 profile in the endpoint design as proposed
+  clarifications for Server IR-0/IR-1: discovery and readiness shapes, accepted
+  request fields, usage, refusal codes and their order. Update the walkthrough,
+  serving guide, decision register and milestone status (LENS-1: reference
+  backend ready; model runtime pending decision).
 - Add the LENS-0 loopback CPU scaffold with liveness, typed unavailable responses,
   and an offline HTTP lifecycle test.
 - Document the proposed profiles, artifact verification, operations and Server v1.5

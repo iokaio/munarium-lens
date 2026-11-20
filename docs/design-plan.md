@@ -31,7 +31,7 @@ boundary](https://github.com/iokaio/munarium/blob/0791d06f3020a8a0d06d646ca407c2
 | Milestone | Work and exit condition | Status |
 |---|---|---|
 | LENS-0 | Pin the Rust toolchain and build graph. Check the loopback stub, content-free errors, lifecycle, indexed design and open-source contributor workflow. Collect LENS-D1-T1. | Scaffold |
-| LENS-1 | Use the IR-0 types and IR-1 probe to implement the published profiles. Pin and verify imported artifacts, implement one backend adapter per stage, apply service authentication and resource limits, build an offline-serving image, and collect LENS-D1-T2 with the actual Server probes. | Pending Server seam and contract |
+| LENS-1 | Use the IR-0 types and IR-1 probe to implement the published profiles. Pin and verify imported artifacts, implement one backend adapter per stage, apply service authentication and resource limits, build an offline-serving image, and collect LENS-D1-T2 with the actual Server probes. | Reference backend ready; model runtime pending decision. Serving, limits, overload refusal and the reference-only image are in place. Artifact import, service authentication, the model adapter and LENS-D1-T2 remain. |
 | LENS-2 | With IR-2–IR-4 available, measure the candidate precision, hardware, throughput and quality. Exercise I1, I2, SC1 and SC2. Meet both I3 thresholds and collect LENS-D1-T3. | Pending working image, approved environments and Server integration |
 | LENS-3 | Compare retrieval instructions to publisher defaults on held-out corpora, pin the winning settings under their own identity and rerun affected qualification. Collect LENS-D1-T4. | Pending frozen judgments and LENS-2 evidence |
 | Workspace release | Build and exercise every root with the chosen profile, resolve citations and verify rollback. Record LENS-D2-T1–T4 and a v1.4 upgrade with Lens disabled on the exact release pair. | Pending qualified profile and authorized corpus freeze |
@@ -129,7 +129,9 @@ activating any state that v1.4 cannot use. [Scaling and rollback](ops/scaling.md
 
 The production runtime, model artifacts and licenses, hardware profile, maximum
 bytes/tokens, queue/concurrency/deadlines, instruction variants, precision and
-per-family quality/latency thresholds require measured evidence. The scaffold's
-toolchain and byte limit only govern its local checks. Track owners and exit
+per-family quality/latency thresholds require measured evidence. The LENS-1
+default limits only govern local checks. The [proposed runtime and model
+comparison](design/model-runtime.md) lists the candidates and what qualification
+measures. Track owners and exit
 criteria in the [decision register](design/decisions.md). Keep required but
 unavailable coverage visible in the release record.

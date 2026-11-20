@@ -1,3 +1,3 @@
 # Contributor guides
 
-- [Build, run and probe the CPU scaffold](local-development.md)
+- [Build, run and probe Lens and the reference backend](local-development.md)

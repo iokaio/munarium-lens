@@ -1,9 +1,11 @@
 # Serving and diagnosis
 
-In the scaffold, only the [local synthetic probes](../guides/local-development.md)
-are available. HTTP 503 from readiness or inference is expected. The service
-runs on IPv4 loopback and loads no assets. The production procedure below is
-the LENS-1 implementation target.
+LENS-1 currently serves only the deterministic reference backend, which is
+not a retrieval model and loads no assets. Use the [local walkthrough](../guides/local-development.md)
+for its probes. Do not enroll a collection against it: readiness and
+discovery report `"retrieval_model": false` for that reason. Service
+authentication, artifact import and a model runtime are pending, so the
+procedure below remains the target for the model-backed image.
 
 1. Obtain the approved image by digest and each verified profile manifest with
    its expected digest. Install assets through the explicit importer into an
@@ -14,7 +16,9 @@ the LENS-1 implementation target.
    private connectivity. Disable serving-time egress and model downloads.
 3. Check liveness, then require readiness evidence for the intended stage,
    exact served identity and successful synthetic profile probe before adding
-   the worker to routing. Check Server's actual enrollment probe from the
+   the worker to routing. `GET /readyz` returns HTTP 200 only when every
+   configured stage passed its startup probe, and lists each ready stage's
+   model, backend, dimensions, manifest digest and limits. Check Server's actual enrollment probe from the
    authenticated deployment before sending collection data.
 4. On bad manifest or missing file, check the configured mount and recorded
    expected digest. Correct the import or mount and restart with the same
