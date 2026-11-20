@@ -31,8 +31,8 @@ mod reference;
 use admission::Admission;
 use backend::{BackendError, EmbeddingBackend, RerankHit, RerankingBackend, ServedIdentity};
 pub use config::{
-    Config, ConfigError, DEFAULT_FILE_TIMEOUT, Limits, ModelCache, StageArtifacts, StageBackend,
-    StageBundle, valid_bundle_name, valid_revision,
+    Config, ConfigError, DEFAULT_FILE_TIMEOUT, FetchProxy, Limits, ModelCache, StageArtifacts,
+    StageBackend, StageBundle, valid_bundle_name, valid_revision,
 };
 
 #[derive(Deserialize)]
@@ -181,7 +181,12 @@ fn load_stage<T>(
                 revision: bundle.revision.clone(),
                 manifest_sha256: artifacts.manifest_sha256,
             };
-            match fetch::fetch_bundle(&cache.directory, &pin, cache.file_timeout) {
+            match fetch::fetch_bundle(
+                &cache.directory,
+                &pin,
+                cache.file_timeout,
+                cache.proxy.as_ref(),
+            ) {
                 Ok(_) => load(),
                 Err(error) => {
                     eprintln!("Lens {stage} stage bundle was not fetched: {error}");
@@ -810,6 +815,7 @@ mod tests {
             model_cache: cache.map(|directory| ModelCache {
                 directory: directory.to_owned(),
                 file_timeout: Duration::from_secs(30),
+                proxy: None,
             }),
             ..Config::default()
         }

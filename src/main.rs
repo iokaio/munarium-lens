@@ -21,7 +21,16 @@ fn fetch(args: Vec<std::ffi::OsString>) -> i32 {
         eprintln!("arguments must be UTF-8\n{}", munarium_lens::fetch::USAGE);
         return 2;
     };
-    munarium_lens::fetch::run_command(&args)
+    // The standard HTTPS proxy settings, read by configuration like every
+    // other variable. A transport route only: the sources stay fixed.
+    let proxy = match munarium_lens::FetchProxy::from_env() {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    munarium_lens::fetch::run_command(&args, proxy.as_ref())
 }
 
 #[cfg(not(feature = "fetch"))]

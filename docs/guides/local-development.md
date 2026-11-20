@@ -192,8 +192,9 @@ docker run --rm --read-only -v lens-models:/var/cache/lens munarium-lens-qwen3:l
 On Kubernetes, mount an `emptyDir` (downloaded again on every new pod) or a
 persistent volume claim (kept across restarts) at `/var/cache/lens`, set
 `readOnlyRootFilesystem: true`, and allow egress on port 443 only to the hosts
-listed in the [README](../../README.md#downloading). Lens ignores proxy
-variables. A first start downloads about 1.2 GB per stage before readiness, so
+listed in the [README](../../README.md#downloading), directly or through an
+HTTP `CONNECT` egress proxy set with `HTTPS_PROXY` and `NO_PROXY` (see the
+README for the accepted forms). A first start downloads about 1.2 GB per stage before readiness, so
 use a startup probe with enough time. The image trusts the Mozilla root
 certificates compiled into the binary (`webpki-roots`), not the base
 image's certificate store. `--build-arg LENS_FEATURES=qwen3` builds the same

@@ -90,8 +90,9 @@ deny = [
     # https://github.com/iokaio/munarium-lens/releases/download/ (tags
     # `models/<bundle>`), tried in that fixed order, with redirects only to
     # those two services' download hosts (src/fetch.rs). Neither base URL nor
-    # the order is configurable, the proxy environment is not read, and Lens
-    # makes no other outbound connection for any reason.
+    # the order is configurable, and Lens fetches from no other host for any
+    # reason. A standard HTTPS_PROXY egress proxy is only a CONNECT route to
+    # those same hosts, through ureq's built-in proxy support (no new crate).
     #
     # Each crate is allowed only through its expected parent, and only in the
     # optional `fetch` feature graph; the default build has none of them.

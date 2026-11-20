@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
-use munarium_lens::Config;
+use munarium_lens::{Config, FetchProxy};
 
 /// Every variable configuration reads. A new variable, for example a base
 /// URL, mirror or source order setting, fails this test until reviewed.
@@ -39,6 +39,12 @@ const READ: &[&str] = &[
     "LENS_RERANKING_BUNDLE_REVISION",
     "LENS_RERANKING_MANIFEST_SHA256",
 ];
+
+/// The standard proxy variables, read only when a stage sets a bundle. A
+/// proxy is a transport route: it cannot name a source, URL or order.
+/// `ALL_PROXY` and `HTTP_PROXY` are deliberately absent (every download is
+/// HTTPS, and `ALL_PROXY` often names an unsupported SOCKS proxy).
+const PROXY_READ: &[&str] = &["HTTPS_PROXY", "NO_PROXY", "https_proxy", "no_proxy"];
 
 fn variables_read(values: &[(&str, &str)]) -> BTreeSet<String> {
     let read = Mutex::new(BTreeSet::new());
@@ -79,8 +85,37 @@ fn configuration_reads_no_endpoint_or_source_setting() {
         })
         .unwrap();
         assert!(config.embedding_bundle.is_some() && config.model_cache.is_some());
-        assert_eq!(variables_read(&full), expected);
+        let with_proxy: BTreeSet<String> = READ
+            .iter()
+            .chain(PROXY_READ)
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(variables_read(&full), with_proxy);
     }
+}
+
+#[test]
+fn the_proxy_reads_only_the_standard_https_variables() {
+    let read = Mutex::new(BTreeSet::new());
+    let proxy = FetchProxy::from_lookup(|name| {
+        read.lock().unwrap().insert(name.to_owned());
+        (name == "HTTPS_PROXY").then(|| "http://proxy.example:3128".to_owned())
+    })
+    .unwrap()
+    .unwrap();
+    let expected: BTreeSet<String> = PROXY_READ.iter().map(|name| (*name).to_owned()).collect();
+    assert_eq!(read.into_inner().unwrap(), expected);
+    assert_eq!((proxy.host(), proxy.port()), ("proxy.example", 3128));
+    // ALL_PROXY and HTTP_PROXY configure nothing.
+    let none = FetchProxy::from_lookup(|name| {
+        matches!(
+            name,
+            "ALL_PROXY" | "all_proxy" | "HTTP_PROXY" | "http_proxy"
+        )
+        .then(|| "http://proxy.example:3128".to_owned())
+    })
+    .unwrap();
+    assert_eq!(none, None);
 }
 
 /// Outside configuration, non-test source never reads the environment, so

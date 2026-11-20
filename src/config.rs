@@ -50,6 +50,236 @@ pub struct ModelCache {
     pub directory: PathBuf,
     /// Longest one file's download may take, redirects included.
     pub file_timeout: Duration,
+    /// The egress proxy the fetcher tunnels through, from the standard
+    /// proxy variables. A transport route only: it never changes which hosts
+    /// are fetched.
+    pub proxy: Option<FetchProxy>,
+}
+
+/// An HTTP `CONNECT` proxy for the fetcher, read from `HTTPS_PROXY` or
+/// `https_proxy`, with exclusions from `NO_PROXY` or `no_proxy`.
+///
+/// The fetcher opens a tunnel through it and runs TLS end to end to the
+/// fixed download host inside, so certificate validation and the redirect
+/// allowlist apply to the target hosts exactly as on a direct connection.
+/// Only `http://` proxy URLs are accepted (TLS to the proxy itself and SOCKS
+/// are not). `ALL_PROXY` and `HTTP_PROXY` are deliberately not read: every
+/// download is HTTPS, and `ALL_PROXY` often names a SOCKS proxy.
+///
+/// `Debug` never shows the credentials, and nothing else prints them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FetchProxy {
+    /// Host as written in the URL; an IPv6 address keeps its brackets.
+    host: String,
+    port: u16,
+    /// Percent-encoded `user[:password]`, exactly as given.
+    userinfo: Option<String>,
+    /// Lowercase host names, domain suffixes or IP addresses, or `*`.
+    no_proxy: Vec<String>,
+}
+
+impl fmt::Debug for FetchProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FetchProxy")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field(
+                "credentials",
+                &if self.userinfo.is_some() {
+                    "<redacted>"
+                } else {
+                    "none"
+                },
+            )
+            .field("no_proxy", &self.no_proxy)
+            .finish()
+    }
+}
+
+const PROXY_EXPECTED: &str = "an http:// proxy URL such as http://<host>:<port>, with \
+any credentials percent-encoded (HTTPS-to-proxy and SOCKS are not supported)";
+
+impl FetchProxy {
+    /// Read the proxy settings from the process environment. `None` when no
+    /// HTTPS proxy is set.
+    pub fn from_env() -> Result<Option<Self>, ConfigError> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Read the proxy settings through `get`. Always reads exactly
+    /// `HTTPS_PROXY`, `https_proxy`, `NO_PROXY` and `no_proxy`.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, ConfigError> {
+        proxy(&get)
+    }
+
+    /// The proxy host, as written in the URL.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Whether the proxy URL carries credentials.
+    pub fn has_credentials(&self) -> bool {
+        self.userinfo.is_some()
+    }
+
+    /// The proxy URL for the HTTP client, including any credentials. Pass it
+    /// only to the client; never print or log it.
+    pub fn client_url(&self) -> String {
+        match &self.userinfo {
+            Some(userinfo) => format!("http://{userinfo}@{}:{}", self.host, self.port),
+            None => format!("http://{}:{}", self.host, self.port),
+        }
+    }
+
+    /// Whether `NO_PROXY` sends a connection to `host` directly: `*`, the
+    /// same name or address, or a subdomain of a listed domain (a leading
+    /// `.` or `*.` is optional). CIDR ranges and ports are not supported, so
+    /// such an entry never matches and the proxy is used.
+    pub fn bypasses(&self, host: &str) -> bool {
+        let host = normalize_host(host);
+        self.no_proxy.iter().any(|entry| {
+            entry == "*"
+                || *entry == host
+                || host
+                    .strip_suffix(entry.as_str())
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+    }
+}
+
+fn normalize_host(host: &str) -> String {
+    let host = host.trim().trim_end_matches('.');
+    let host = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    host.to_ascii_lowercase()
+}
+
+/// Read a variable spelled in upper and lower case. Both are always read;
+/// set to different values they are refused rather than one silently
+/// winning. Empty counts as unset.
+fn either_case(
+    get: &impl Fn(&str) -> Option<String>,
+    upper: &'static str,
+    lower: &'static str,
+) -> Result<Option<(&'static str, String)>, ConfigError> {
+    match (non_empty(get, upper), non_empty(get, lower)) {
+        (Some(a), Some(b)) if a != b => Err(ConfigError {
+            variable: lower,
+            expected: "unset, or the same value as the upper-case variable",
+        }),
+        (Some(value), _) => Ok(Some((upper, value))),
+        (None, Some(value)) => Ok(Some((lower, value))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn proxy(get: &impl Fn(&str) -> Option<String>) -> Result<Option<FetchProxy>, ConfigError> {
+    let url = either_case(get, "HTTPS_PROXY", "https_proxy")?;
+    let no_proxy = either_case(get, "NO_PROXY", "no_proxy")?;
+    let Some((variable, url)) = url else {
+        return Ok(None);
+    };
+    let (host, port, userinfo) = parse_proxy_url(&url).ok_or(ConfigError {
+        variable,
+        expected: PROXY_EXPECTED,
+    })?;
+    let no_proxy = no_proxy
+        .map(|(_, list)| {
+            list.split(',')
+                .map(|entry| {
+                    let entry = entry.trim();
+                    let entry = entry
+                        .strip_prefix("*.")
+                        .or_else(|| entry.strip_prefix('.'))
+                        .unwrap_or(entry);
+                    normalize_host(entry)
+                })
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Some(FetchProxy {
+        host,
+        port,
+        userinfo,
+        no_proxy,
+    }))
+}
+
+/// Whether `userinfo` is RFC 3986 user information whose percent-encoding
+/// decodes to UTF-8, as the HTTP client requires.
+fn valid_userinfo(userinfo: &str) -> bool {
+    let bytes = userinfo.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            let Some(hex) = userinfo.get(index + 1..index + 3) else {
+                return false;
+            };
+            let Ok(value) = u8::from_str_radix(hex, 16) else {
+                return false;
+            };
+            decoded.push(value);
+            index += 3;
+        } else if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:".contains(&byte) {
+            decoded.push(byte);
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    String::from_utf8(decoded).is_ok()
+}
+
+/// Parse `[http://][user[:password]@]host[:port][/]`. The port defaults to
+/// 80. Any other scheme, a path, query or fragment is refused.
+fn parse_proxy_url(value: &str) -> Option<(String, u16, Option<String>)> {
+    let value = value.trim();
+    let rest = match value.split_once("://") {
+        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => rest,
+        Some(_) => return None,
+        None => value,
+    };
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if authority.is_empty()
+        || authority
+            .chars()
+            .any(|c| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    let (userinfo, host_port) = match authority.rsplit_once('@') {
+        Some((userinfo, host_port)) => (Some(userinfo), host_port),
+        None => (None, authority),
+    };
+    if let Some(userinfo) = userinfo
+        && (userinfo.is_empty() || !valid_userinfo(userinfo))
+    {
+        return None;
+    }
+    let parsed: axum::http::uri::Authority = host_port.parse().ok()?;
+    let host = parsed.host();
+    if host.is_empty() {
+        return None;
+    }
+    // The client's parser maps an out-of-range port to "no port", so read
+    // the port text here.
+    let port = match host_port.strip_prefix(host)? {
+        "" => 80,
+        text => match text.strip_prefix(':')?.parse::<u16>().ok()? {
+            0 => return None,
+            port => port,
+        },
+    };
+    Some((host.to_owned(), port, userinfo.map(str::to_owned)))
 }
 
 /// Default bound on one file's download.
@@ -272,7 +502,8 @@ fn bundle(
 }
 
 /// Read the shared cache settings, which exist exactly when a stage has a
-/// bundle.
+/// bundle. The proxy variables are read only then, so a deployment without
+/// a bundle is never affected by them.
 fn model_cache(
     get: &impl Fn(&str) -> Option<String>,
     any_bundle: bool,
@@ -304,6 +535,7 @@ fn model_cache(
         (true, Some(directory)) => Ok(Some(ModelCache {
             directory: PathBuf::from(directory),
             file_timeout: Duration::from_secs(seconds as u64),
+            proxy: proxy(get)?,
         })),
     }
 }
@@ -732,6 +964,225 @@ mod tests {
             timed.model_cache.unwrap().file_timeout,
             Duration::from_secs(600)
         );
+    }
+
+    fn proxy_lookup(pairs: &[(&str, &str)]) -> Result<Option<FetchProxy>, ConfigError> {
+        FetchProxy::from_lookup(|name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        })
+    }
+
+    #[test]
+    fn reads_an_http_connect_proxy_from_the_standard_variables() {
+        assert_eq!(proxy_lookup(&[]).unwrap(), None);
+        // NO_PROXY alone configures no proxy.
+        assert_eq!(proxy_lookup(&[("NO_PROXY", "*")]).unwrap(), None);
+        for (pairs, host, port) in [
+            (
+                &[("HTTPS_PROXY", "http://proxy.example:3128")][..],
+                "proxy.example",
+                3128,
+            ),
+            (
+                &[("https_proxy", "HTTP://proxy.example/")][..],
+                "proxy.example",
+                80,
+            ),
+            (&[("HTTPS_PROXY", "10.0.0.7:8080")][..], "10.0.0.7", 8080),
+            (&[("HTTPS_PROXY", "http://[::1]:3128")][..], "[::1]", 3128),
+            (
+                &[
+                    ("HTTPS_PROXY", "http://proxy.example:3128"),
+                    ("https_proxy", "http://proxy.example:3128"),
+                ][..],
+                "proxy.example",
+                3128,
+            ),
+        ] {
+            let proxy = proxy_lookup(pairs).unwrap().unwrap();
+            assert_eq!((proxy.host(), proxy.port()), (host, port), "{pairs:?}");
+            assert!(!proxy.has_credentials());
+        }
+        let proxy = proxy_lookup(&[("HTTPS_PROXY", "http://proxy.example:3128")])
+            .unwrap()
+            .unwrap();
+        assert_eq!(proxy.client_url(), "http://proxy.example:3128");
+    }
+
+    #[test]
+    fn refuses_unsupported_proxy_urls_without_echoing_them() {
+        for value in [
+            "https://proxy.example:3128",
+            "socks5://proxy.example:1080",
+            "socks5h://proxy.example:1080",
+            "socks://proxy.example",
+            "ftp://proxy.example",
+            "http://proxy.example:3128/path",
+            "http://proxy.example:3128?x=1",
+            "http://proxy.example:3128#x",
+            "http://proxy.example:0",
+            "http://proxy.example:99999",
+            "http://proxy.example:",
+            "http://",
+            "http://user:p@ss@proxy.example:3128",
+            "http://user:%zz@proxy.example:3128",
+            "http://user:%ff@proxy.example:3128",
+            "http://@proxy.example:3128",
+            "http://proxy example:3128",
+        ] {
+            let error = proxy_lookup(&[("HTTPS_PROXY", value)]).unwrap_err();
+            assert_eq!(error.variable, "HTTPS_PROXY", "{value}");
+            assert_eq!(error.expected, PROXY_EXPECTED, "{value}");
+            // The message names the scheme it expects; any longer value
+            // never appears in it.
+            if value != "http://" {
+                assert!(!error.to_string().contains(value), "{value}");
+            }
+        }
+        // The two spellings must agree.
+        let error = proxy_lookup(&[
+            ("HTTPS_PROXY", "http://a.example:3128"),
+            ("https_proxy", "http://b.example:3128"),
+        ])
+        .unwrap_err();
+        assert_eq!(error.variable, "https_proxy");
+        assert!(!error.to_string().contains("example"));
+        let error = proxy_lookup(&[
+            ("HTTPS_PROXY", "http://a.example:3128"),
+            ("NO_PROXY", "a"),
+            ("no_proxy", "b"),
+        ])
+        .unwrap_err();
+        assert_eq!(error.variable, "no_proxy");
+    }
+
+    #[test]
+    fn proxy_credentials_never_appear_in_debug_output_or_errors() {
+        let proxy = proxy_lookup(&[(
+            "HTTPS_PROXY",
+            "http://lens-user:s%40cret-pw@proxy.example:3128",
+        )])
+        .unwrap()
+        .unwrap();
+        assert!(proxy.has_credentials());
+        // The client gets the credentials, still percent-encoded.
+        assert_eq!(
+            proxy.client_url(),
+            "http://lens-user:s%40cret-pw@proxy.example:3128"
+        );
+        let cache = ModelCache {
+            directory: PathBuf::from("/var/cache/lens"),
+            file_timeout: DEFAULT_FILE_TIMEOUT,
+            proxy: Some(proxy.clone()),
+        };
+        let config = Config {
+            model_cache: Some(cache),
+            ..Config::default()
+        };
+        for text in [
+            format!("{proxy:?}"),
+            format!("{config:?}"),
+            format!("{config:#?}"),
+        ] {
+            assert!(text.contains("<redacted>"), "{text}");
+            for secret in ["lens-user", "s%40cret-pw", "s@cret-pw", "cret"] {
+                assert!(!text.contains(secret), "{text}");
+            }
+        }
+        let error = proxy_lookup(&[("HTTPS_PROXY", "socks5://lens-user:s3cret@proxy.example")])
+            .unwrap_err();
+        assert!(!error.to_string().contains("s3cret"));
+        assert!(!format!("{error:?}").contains("s3cret"));
+    }
+
+    #[test]
+    fn no_proxy_matches_names_suffixes_and_addresses() {
+        let proxy = proxy_lookup(&[
+            ("HTTPS_PROXY", "http://proxy.example:3128"),
+            (
+                "no_proxy",
+                " internal.example, .HF.CO ,*.corp.example,10.0.0.0/8,127.0.0.1,[::1],,",
+            ),
+        ])
+        .unwrap()
+        .unwrap();
+        for host in [
+            "internal.example",
+            "a.internal.example",
+            "cdn-lfs.hf.co",
+            "hf.co",
+            "x.corp.example",
+            "corp.example",
+            "127.0.0.1",
+            "[::1]",
+            "CDN-LFS.HF.CO",
+        ] {
+            assert!(proxy.bypasses(host), "{host}");
+        }
+        for host in [
+            "huggingface.co",
+            "github.com",
+            "notinternal.example",
+            "internal.example.net",
+            "10.1.2.3",
+            "127.0.0.2",
+        ] {
+            assert!(!proxy.bypasses(host), "{host}");
+        }
+        let all = proxy_lookup(&[
+            ("HTTPS_PROXY", "http://proxy.example:3128"),
+            ("NO_PROXY", "*"),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(all.bypasses("huggingface.co"));
+        let none = proxy_lookup(&[("HTTPS_PROXY", "http://proxy.example:3128")])
+            .unwrap()
+            .unwrap();
+        assert!(!none.bypasses("huggingface.co"));
+    }
+
+    #[test]
+    fn proxy_variables_are_ignored_without_a_bundle() {
+        // A reference deployment in an environment with an unsupported proxy
+        // still starts: the variables are read only with a bundle.
+        let config = lookup(&[
+            ("HTTPS_PROXY", "socks5://proxy.example:1080"),
+            ("https_proxy", "http://other.example:3128"),
+        ])
+        .unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[cfg(all(feature = "fetch", feature = "qwen3"))]
+    #[test]
+    fn a_bundle_reads_the_proxy_settings() {
+        let digest = "0f".repeat(32);
+        let base = [
+            ("LENS_EMBEDDING_BACKEND", "qwen3"),
+            ("LENS_EMBEDDING_BUNDLE", "qwen3-embedding-0.6b-f32-1024d"),
+            ("LENS_EMBEDDING_BUNDLE_REVISION", COMMIT),
+            ("LENS_EMBEDDING_MANIFEST_SHA256", digest.as_str()),
+            ("LENS_MODEL_CACHE_DIR", "/var/cache/lens"),
+        ];
+        assert_eq!(lookup(&base).unwrap().model_cache.unwrap().proxy, None);
+        let mut proxied = base.to_vec();
+        proxied.push(("HTTPS_PROXY", "http://proxy.example:3128"));
+        proxied.push(("NO_PROXY", "internal.example"));
+        let proxy = lookup(&proxied)
+            .unwrap()
+            .model_cache
+            .unwrap()
+            .proxy
+            .unwrap();
+        assert_eq!((proxy.host(), proxy.port()), ("proxy.example", 3128));
+        assert!(proxy.bypasses("internal.example"));
+        let mut refused = base.to_vec();
+        refused.push(("HTTPS_PROXY", "socks5://proxy.example:1080"));
+        assert_eq!(lookup(&refused).unwrap_err().variable, "HTTPS_PROXY");
     }
 
     #[test]

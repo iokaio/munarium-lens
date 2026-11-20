@@ -119,8 +119,9 @@ stack at all.
   `https://huggingface.co/iokaio/munarium-lens-models` and, if that fails, from
   `https://github.com/iokaio/munarium-lens/releases/download/`. Both are
   compile-time constants. There is no setting or option for another base URL,
-  a mirror, a different order or skipping Hugging Face, and Lens makes no
-  other outbound connection for any reason.
+  a mirror, a different order or skipping Hugging Face, and Lens fetches from
+  no other host for any reason. An egress proxy (below) changes only the
+  route, never the hosts.
 - **URLs.** Hugging Face:
   `https://huggingface.co/iokaio/munarium-lens-models/resolve/<commit>/<bundle>/<file>`.
   GitHub: `https://github.com/iokaio/munarium-lens/releases/download/models/<bundle>/<file>`.
@@ -153,12 +154,31 @@ stack at all.
   60 s for any single read, and a total per file of
   `LENS_MODEL_FETCH_TIMEOUT_SECS` (default 3600) including redirects.
   Interrupted downloads restart from the beginning; there is no resume.
-- **No credentials.** Both locations are public. Lens sends no token, reads no
-  proxy variables (`HTTPS_PROXY` and similar are ignored, so the host needs
-  direct HTTPS egress to the hosts above) and accepts no extra headers.
-  Failures log one fixed category per attempt, for example
-  `Lens fetch: file from huggingface failed: file_digest_mismatch`, with no
-  URL, path or value.
+- **Egress proxy.** Lens honors the standard proxy settings through an HTTP
+  `CONNECT` tunnel, with TLS end to end to the download host inside it, so
+  certificate validation and the redirect allowlist apply to the target hosts
+  exactly as on a direct connection. The proxy is a transport route only: it
+  cannot change which hosts are fetched, its own answers are never followed
+  as redirects, and a target that is not HTTPS is never sent through it.
+  - `HTTPS_PROXY` or `https_proxy`: `http://[user:password@]host[:port]`
+    (port 80 by default; a bare `host:port` means the same). Percent-encode
+    reserved characters in the credentials. `https://` (TLS to the proxy) and
+    SOCKS URLs are refused at startup with the variable named, not its value.
+    If both spellings are set they must agree.
+  - `NO_PROXY` or `no_proxy`: comma-separated host names, domains (matching
+    their subdomains; a leading `.` or `*.` is optional), IP addresses, or `*`
+    for all. CIDR ranges and ports are not supported and never match, so the
+    proxy is used.
+  - `ALL_PROXY` and `HTTP_PROXY` are deliberately not read: every download is
+    HTTPS, and `ALL_PROXY` often names a SOCKS proxy, which is not supported.
+  - The variables are read only by the `fetch` subcommand and by a server
+    with a stage bundle; without a bundle they are ignored.
+  - Proxy credentials are sent only to the proxy, in `Proxy-Authorization`,
+    and are never logged; a proxy that refuses the tunnel logs `proxy_failed`.
+- **No credentials.** Both locations are public. Lens sends them no token and
+  accepts no extra headers. Failures log one fixed category per attempt, for
+  example `Lens fetch: file from huggingface failed: file_digest_mismatch`,
+  with no URL, path or value.
 
 #### The `fetch` subcommand
 

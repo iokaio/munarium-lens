@@ -33,7 +33,8 @@ pinned bundle into a writable cache, either with `munarium-lens fetch` or at
 startup, only from the fixed Hugging Face repository
 `huggingface.co/iokaio/munarium-lens-models` and, if that fails, the fixed
 `models/<bundle>` release of this repository. The locations and their order
-are compile-time constants; Lens makes no other outbound connection, and
+are compile-time constants; Lens fetches from no other host (a standard
+`HTTPS_PROXY` egress proxy is only a `CONNECT` route to the same hosts), and
 never fetches during request handling. The fetched directory then passes the
 verification below unchanged. `fetch` adds `ureq` 3.5.2 with `rustls` 0.23,
 the `ring` crypto provider and `webpki-roots`: 24 more runtime crates on the
@@ -265,7 +266,3 @@ Still open:
   for Xet storage, `cdn-lfs*.hf.co` for LFS) and the GitHub release-asset
   host that the first published bundle actually redirects to, and trim the
   allowlist to them. A host outside the list fails closed.
-- **Proxies.** The fetcher reads no proxy variables, following the rule that
-  Lens contacts only the two locations. A deployment behind an egress proxy
-  needs either a direct route to the listed hosts or a maintainer decision to
-  permit a configured HTTPS `CONNECT` proxy.

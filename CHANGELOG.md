@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The fetcher honors the standard egress proxy settings (maintainer decision
+  of 20 November 2026): `HTTPS_PROXY`/`https_proxy` names an `http://` proxy,
+  optionally with credentials, and `NO_PROXY`/`no_proxy` lists hosts to reach
+  directly. Requests go through an HTTP `CONNECT` tunnel with TLS end to end
+  to the fixed download hosts, so certificate validation and the redirect
+  allowlist are unchanged; the base URLs and the order stay fixed. Proxy URLs
+  with other schemes (HTTPS-to-proxy, SOCKS) are refused, a non-HTTPS target
+  is never proxied, a proxy that refuses the tunnel fails with
+  `proxy_failed`, and credentials are never logged. `ALL_PROXY` and
+  `HTTP_PROXY` are not read. The variables are read only with a stage bundle
+  or by the `fetch` subcommand. `fetch_bundle` and `run_command` take the
+  proxy as a new argument.
 - Add the optional `fetch` cargo feature, off by default (maintainer decision
   of 20 November 2026). It downloads a model bundle pinned by name, full
   Hugging Face commit and manifest SHA-256, only from the fixed
@@ -9,7 +21,7 @@
   the fixed `models/<bundle>` GitHub release of this repository. The base URLs
   and the order are compile-time constants with no setting or option to change
   them; redirects are followed only over HTTPS to each location's documented
-  download hosts, and proxy variables are ignored. The manifest is fetched and
+  download hosts. The manifest is fetched and
   checked first with the shared manifest code; only listed files follow, each
   streamed to a temporary file capped at its listed size, checked, flushed and
   renamed into place. Verified files are reused, so a complete cache makes no

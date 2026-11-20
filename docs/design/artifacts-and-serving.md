@@ -52,7 +52,9 @@ outbound network use in Lens, and only these two locations are allowed:
   build can substitute a local test server, and a test fails if any
   non-test source module reads the environment or configuration reads an
   unreviewed variable. Redirects stay on HTTPS to each source's documented
-  download hosts. Proxy variables are not read.
+  download hosts. A standard `HTTPS_PROXY`/`NO_PROXY` egress proxy is a
+  transport route only: an HTTP `CONNECT` tunnel with TLS end to end to the
+  same hosts, chosen per request after the allowlist check.
 - **Pins.** Bundle name, the full Hugging Face commit (branches and tags are
   refused) and the manifest SHA-256. The manifest is downloaded first and
   checked with the same parse and path checks as an operator directory; only
