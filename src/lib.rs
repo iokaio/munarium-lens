@@ -20,7 +20,9 @@ use tokio::net::TcpListener;
 mod admission;
 mod backend;
 mod config;
-#[cfg(feature = "qwen3")]
+#[cfg(feature = "fetch")]
+pub mod fetch;
+#[cfg(any(feature = "qwen3", feature = "fetch"))]
 mod manifest;
 #[cfg(feature = "qwen3")]
 mod qwen3;
@@ -28,7 +30,10 @@ mod reference;
 
 use admission::Admission;
 use backend::{BackendError, EmbeddingBackend, RerankHit, RerankingBackend, ServedIdentity};
-pub use config::{Config, ConfigError, Limits, StageArtifacts, StageBackend};
+pub use config::{
+    Config, ConfigError, DEFAULT_FILE_TIMEOUT, Limits, ModelCache, StageArtifacts, StageBackend,
+    StageBundle, valid_bundle_name, valid_revision,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -141,36 +146,92 @@ fn load_failed(stage: &str, error: manifest::ArtifactError) {
     eprintln!("Lens {stage} stage did not load: {error}");
 }
 
+/// Whether a load failure means the local bundle is missing or damaged,
+/// so a configured startup fetch can repair it.
+#[cfg(all(feature = "qwen3", feature = "fetch"))]
+fn refetchable(error: manifest::ArtifactError) -> bool {
+    use manifest::ArtifactError as E;
+    matches!(
+        error,
+        E::ManifestUnreadable
+            | E::ManifestDigestMismatch
+            | E::FileUnreadable
+            | E::FileDigestMismatch
+    )
+}
+
+/// Load a model-backed stage. With a configured bundle whose local copy is
+/// missing or damaged, fetch it first; the fetched directory then passes the
+/// same verification as an operator-supplied one. Runs only at startup.
+#[cfg(feature = "qwen3")]
+fn load_stage<T>(
+    stage: &str,
+    config: &Config,
+    bundle: Option<&StageBundle>,
+    artifacts: &StageArtifacts,
+    load: impl Fn() -> Result<T, manifest::ArtifactError>,
+) -> Option<T> {
+    let result = load();
+    #[cfg(feature = "fetch")]
+    let result = match (result, bundle, config.model_cache.as_ref()) {
+        (Err(error), Some(bundle), Some(cache)) if refetchable(error) => {
+            eprintln!("Lens {stage} stage: fetching its pinned bundle");
+            let pin = fetch::Pin {
+                bundle: bundle.bundle.clone(),
+                revision: bundle.revision.clone(),
+                manifest_sha256: artifacts.manifest_sha256,
+            };
+            match fetch::fetch_bundle(&cache.directory, &pin, cache.file_timeout) {
+                Ok(_) => load(),
+                Err(error) => {
+                    eprintln!("Lens {stage} stage bundle was not fetched: {error}");
+                    return None;
+                }
+            }
+        }
+        (result, _, _) => result,
+    };
+    #[cfg(not(feature = "fetch"))]
+    let _ = (config, bundle, artifacts);
+    result.map_err(|error| load_failed(stage, error)).ok()
+}
+
 #[cfg(feature = "qwen3")]
 fn load_qwen3_embedding(config: &Config) -> Option<Arc<dyn EmbeddingBackend>> {
     let artifacts = config.embedding_artifacts.as_ref()?;
-    match qwen3::Qwen3Embedding::load(
-        &artifacts.directory,
-        &artifacts.manifest_sha256,
-        config.limits.max_input_tokens,
-    ) {
-        Ok(backend) => Some(Arc::new(backend)),
-        Err(error) => {
-            load_failed("embedding", error);
-            None
-        }
-    }
+    let backend = load_stage(
+        "embedding",
+        config,
+        config.embedding_bundle.as_ref(),
+        artifacts,
+        || {
+            qwen3::Qwen3Embedding::load(
+                &artifacts.directory,
+                &artifacts.manifest_sha256,
+                config.limits.max_input_tokens,
+            )
+        },
+    )?;
+    Some(Arc::new(backend))
 }
 
 #[cfg(feature = "qwen3")]
 fn load_qwen3_reranking(config: &Config) -> Option<Arc<dyn RerankingBackend>> {
     let artifacts = config.reranking_artifacts.as_ref()?;
-    match qwen3::Qwen3Reranking::load(
-        &artifacts.directory,
-        &artifacts.manifest_sha256,
-        config.limits.max_input_tokens,
-    ) {
-        Ok(backend) => Some(Arc::new(backend)),
-        Err(error) => {
-            load_failed("reranking", error);
-            None
-        }
-    }
+    let backend = load_stage(
+        "reranking",
+        config,
+        config.reranking_bundle.as_ref(),
+        artifacts,
+        || {
+            qwen3::Qwen3Reranking::load(
+                &artifacts.directory,
+                &artifacts.manifest_sha256,
+                config.limits.max_input_tokens,
+            )
+        },
+    )?;
+    Some(Arc::new(backend))
 }
 
 impl AppState {
@@ -734,6 +795,100 @@ mod tests {
         let (status, _, body) = parts(ready(State(faulty(2, 0.5, 1))).await).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains(&format!(r#""manifest_sha256":"{}""#, "ab".repeat(32))));
+    }
+
+    #[cfg(all(feature = "qwen3", feature = "fetch"))]
+    fn qwen3_config(
+        artifacts: StageArtifacts,
+        bundle: Option<StageBundle>,
+        cache: Option<&std::path::Path>,
+    ) -> Config {
+        Config {
+            embedding: StageBackend::Qwen3,
+            embedding_artifacts: Some(artifacts),
+            embedding_bundle: bundle,
+            model_cache: cache.map(|directory| ModelCache {
+                directory: directory.to_owned(),
+                file_timeout: Duration::from_secs(30),
+            }),
+            ..Config::default()
+        }
+    }
+
+    #[cfg(all(feature = "qwen3", feature = "fetch"))]
+    #[test]
+    fn without_bundle_settings_startup_makes_no_connection() {
+        use crate::fetch::tests::{Reply, TestServer, UseEndpoints, requests};
+        let (hf, gh) = (TestServer::start(), TestServer::start());
+        hf.route("/", Reply::Status(200));
+        let _endpoints = UseEndpoints::new(
+            format!("{}/hf", hf.origin()),
+            format!("{}/gh/", gh.origin()),
+        );
+        let missing = std::env::temp_dir().join("munarium-lens-test-missing-artifacts");
+        let config = qwen3_config(
+            StageArtifacts {
+                directory: missing,
+                manifest_sha256: [7; 32],
+            },
+            None,
+            None,
+        );
+        let before = requests();
+        let state = AppState::from_config(&config);
+        assert!(matches!(state.embedding, StageState::Failed));
+        assert_eq!(requests(), before);
+        assert!(hf.hits().is_empty() && gh.hits().is_empty());
+    }
+
+    #[cfg(all(feature = "qwen3", feature = "fetch"))]
+    #[tokio::test]
+    async fn a_stage_with_a_bundle_fetches_at_startup_and_stays_failed_until_verified() {
+        use crate::fetch::tests::{
+            BUNDLE, Bundle, REVISION, TestServer, UseEndpoints, hf_path, serve_hf,
+        };
+        use crate::manifest::tests::Scratch;
+        let bundle = Bundle::new(&[
+            ("config.json", b"{}"),
+            ("tokenizer.json", b"{}"),
+            ("model.safetensors", b"not weights"),
+        ]);
+        let pin = bundle.pin();
+        let (hf, gh) = (TestServer::start(), TestServer::start());
+        let _endpoints = UseEndpoints::new(
+            format!("{}/hf", hf.origin()),
+            format!("{}/gh/", gh.origin()),
+        );
+        let cache = Scratch::new();
+        let stage_bundle = StageBundle {
+            bundle: BUNDLE.to_owned(),
+            revision: REVISION.to_owned(),
+        };
+        let artifacts = StageArtifacts {
+            directory: cache.0.join(BUNDLE),
+            manifest_sha256: pin.manifest_sha256,
+        };
+        let config = qwen3_config(artifacts, Some(stage_bundle), Some(&cache.0));
+        // Both sources missing: failed, and readiness is 503.
+        let state = Arc::new(AppState::from_config(&config));
+        assert!(matches!(state.embedding, StageState::Failed));
+        let (status, _, _) = parts(ready(State(state)).await).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        // Served: the bundle is fetched and verified, then loaded. These
+        // synthetic files are not a model, so the stage still fails to load.
+        serve_hf(&hf, &bundle);
+        let state = AppState::from_config(&config);
+        assert!(matches!(state.embedding, StageState::Failed));
+        assert!(hf.hits().contains(&hf_path("model.safetensors")));
+        assert_eq!(
+            std::fs::read(cache.0.join(BUNDLE).join("model.safetensors")).unwrap(),
+            b"not weights"
+        );
+        assert!(
+            gh.hits()
+                .iter()
+                .all(|hit| hit.contains("lens-manifest.json"))
+        );
     }
 
     #[test]

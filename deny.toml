@@ -33,6 +33,14 @@ allow = [
 name = "munarium-lens"
 allow = ["Apache-2.0"]
 
+# webpki-roots is Mozilla's CA root list compiled in as data, under the
+# permissive CDLA-Permissive-2.0 data license. Only the optional `fetch`
+# graph has it (maintainer decision of 20 November 2026, see [bans]). The
+# exception is scoped to this one crate rather than added to `allow`.
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [advisories]
 # The advisory database is fetched at check time. Every RustSec advisory,
 # including unmaintained and unsound notices, fails the check. An exception
@@ -60,7 +68,7 @@ ignore = [
 multiple-versions = "warn"
 wildcards = "deny"
 deny = [
-    # No TLS or native crypto stacks: Lens has no outbound network client.
+    # No OpenSSL or platform TLS: the static musl image must not link them.
     { crate = "openssl" },
     { crate = "openssl-sys" },
     { crate = "native-tls" },
@@ -69,9 +77,32 @@ deny = [
     { crate = "onig" },
     { crate = "onig_sys" },
     { crate = "hf-hub" },
-    # No runtime model downloads or HTTP clients in the graph.
+    # No other HTTP client, and not the C-based aws-lc crypto provider.
     { crate = "reqwest" },
-    { crate = "ureq" },
+    { crate = "aws-lc-rs" },
+    { crate = "aws-lc-sys" },
+    # Model bundle download: the ONE exception to "no HTTP client or TLS".
+    #
+    # Maintainer decision, 20 November 2026: Lens may download model bundles,
+    # because baking weights into the image would make it far too large. The
+    # allowance covers only the fixed Hugging Face repository
+    # https://huggingface.co/iokaio/munarium-lens-models and the fixed backup
+    # https://github.com/iokaio/munarium-lens/releases/download/ (tags
+    # `models/<bundle>`), tried in that fixed order, with redirects only to
+    # those two services' download hosts (src/fetch.rs). Neither base URL nor
+    # the order is configurable, the proxy environment is not read, and Lens
+    # makes no other outbound connection for any reason.
+    #
+    # Each crate is allowed only through its expected parent, and only in the
+    # optional `fetch` feature graph; the default build has none of them.
+    # ureq 3.5.2 with default features off and `rustls`: rustls 0.23 on the
+    # ring provider with the compiled-in webpki-roots trust store.
+    { crate = "ureq", wrappers = ["munarium-lens"] },
+    { crate = "ureq-proto", wrappers = ["ureq"] },
+    { crate = "rustls", wrappers = ["ureq"] },
+    { crate = "rustls-webpki", wrappers = ["rustls"] },
+    { crate = "webpki-roots", wrappers = ["ureq"] },
+    { crate = "ring", wrappers = ["rustls", "rustls-webpki"] },
 ]
 
 [sources]

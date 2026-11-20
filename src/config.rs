@@ -31,6 +31,52 @@ pub struct StageArtifacts {
     pub manifest_sha256: [u8; 32],
 }
 
+/// A pinned model bundle that Lens fetches for a stage at startup. Only a
+/// build with the `fetch` feature accepts one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageBundle {
+    /// Bundle name: the manifest's `served_model` and the bundle's directory
+    /// in both distribution locations.
+    pub bundle: String,
+    /// Pinned Hugging Face repository commit: 40 lowercase hex characters.
+    pub revision: String,
+}
+
+/// Where fetched bundles are written, and how long one file may take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCache {
+    /// Writable directory outside the source tree. Each bundle is written to
+    /// `<directory>/<bundle>`.
+    pub directory: PathBuf,
+    /// Longest one file's download may take, redirects included.
+    pub file_timeout: Duration,
+}
+
+/// Default bound on one file's download.
+pub const DEFAULT_FILE_TIMEOUT: Duration = Duration::from_secs(3_600);
+
+/// Whether `name` can be a bundle name: 1 to 128 ASCII letters, digits,
+/// `.`, `-` or `_`, starting with a letter or digit. It is one path segment
+/// in both download URLs and in the cache directory.
+pub fn valid_bundle_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(b))
+}
+
+/// Whether `revision` is a full commit id: exactly 40 lowercase hex
+/// characters. Branch names such as `main`, tags and short ids are refused.
+pub fn valid_revision(revision: &str) -> bool {
+    revision.len() == 40
+        && revision
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Request, batch and admission bounds, applied per stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Limits {
@@ -80,6 +126,13 @@ pub struct Config {
     pub embedding_artifacts: Option<StageArtifacts>,
     /// Artifacts of a model-backed reranking stage.
     pub reranking_artifacts: Option<StageArtifacts>,
+    /// Bundle fetched for the embedding stage at startup. Its artifacts are
+    /// then `<cache>/<bundle>`.
+    pub embedding_bundle: Option<StageBundle>,
+    /// Bundle fetched for the reranking stage at startup.
+    pub reranking_bundle: Option<StageBundle>,
+    /// Present exactly when a stage has a bundle.
+    pub model_cache: Option<ModelCache>,
     pub limits: Limits,
 }
 
@@ -93,6 +146,9 @@ impl Default for Config {
             reference_dimensions: 1024,
             embedding_artifacts: None,
             reranking_artifacts: None,
+            embedding_bundle: None,
+            reranking_bundle: None,
+            model_cache: None,
             limits: Limits::default(),
         }
     }
@@ -174,16 +230,118 @@ pub(crate) fn parse_sha256(text: &str) -> Option<[u8; 32]> {
 
 const DIGEST_EXPECTED: &str = "the manifest's lowercase hex SHA-256";
 
+const REVISION_EXPECTED: &str =
+    "the pinned commit: 40 lowercase hex characters, not a branch or tag";
+
+fn non_empty(get: &impl Fn(&str) -> Option<String>, variable: &str) -> Option<String> {
+    get(variable)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// Read a stage's bundle name and pinned revision. Both or neither must be
+/// set, only for a model-backed stage and only in a build that can fetch.
+fn bundle(
+    get: &impl Fn(&str) -> Option<String>,
+    name_variable: &'static str,
+    revision_variable: &'static str,
+    backend: StageBackend,
+) -> Result<Option<StageBundle>, ConfigError> {
+    let name = non_empty(get, name_variable);
+    let revision = non_empty(get, revision_variable);
+    let error = |variable, expected| Err(ConfigError { variable, expected });
+    match (name, revision) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => error(name_variable, "a bundle name with the revision"),
+        (Some(_), _) if !cfg!(feature = "fetch") => {
+            error(name_variable, "unset: this build has no fetch feature")
+        }
+        (Some(_), _) if !is_model_backed(backend) => {
+            error(name_variable, "unset unless the stage uses a model backend")
+        }
+        (Some(name), _) if !valid_bundle_name(&name) => error(
+            name_variable,
+            "a bundle name of letters, digits, '.', '-' or '_'",
+        ),
+        (Some(_), None) => error(revision_variable, REVISION_EXPECTED),
+        (Some(_), Some(revision)) if !valid_revision(&revision) => {
+            error(revision_variable, REVISION_EXPECTED)
+        }
+        (Some(bundle), Some(revision)) => Ok(Some(StageBundle { bundle, revision })),
+    }
+}
+
+/// Read the shared cache settings, which exist exactly when a stage has a
+/// bundle.
+fn model_cache(
+    get: &impl Fn(&str) -> Option<String>,
+    any_bundle: bool,
+) -> Result<Option<ModelCache>, ConfigError> {
+    let directory = non_empty(get, "LENS_MODEL_CACHE_DIR");
+    let timeout_set = get("LENS_MODEL_FETCH_TIMEOUT_SECS").is_some();
+    let seconds = number(
+        get,
+        "LENS_MODEL_FETCH_TIMEOUT_SECS",
+        1,
+        86_400,
+        "seconds from 1 to 86400",
+        DEFAULT_FILE_TIMEOUT.as_secs() as usize,
+    )?;
+    match (any_bundle, directory) {
+        (false, None) if !timeout_set => Ok(None),
+        (false, None) => Err(ConfigError {
+            variable: "LENS_MODEL_FETCH_TIMEOUT_SECS",
+            expected: "unset unless a stage sets a bundle",
+        }),
+        (false, Some(_)) => Err(ConfigError {
+            variable: "LENS_MODEL_CACHE_DIR",
+            expected: "unset unless a stage sets a bundle",
+        }),
+        (true, None) => Err(ConfigError {
+            variable: "LENS_MODEL_CACHE_DIR",
+            expected: "a writable cache directory for the stage bundles",
+        }),
+        (true, Some(directory)) => Ok(Some(ModelCache {
+            directory: PathBuf::from(directory),
+            file_timeout: Duration::from_secs(seconds as u64),
+        })),
+    }
+}
+
 /// Read a stage's artifact directory and manifest digest. Both or neither
-/// must be set, and both are required when `required` is true.
+/// must be set, and both are required when `required` is true. With a
+/// bundle the directory is `<cache>/<bundle>` and must not also be set.
 fn artifacts(
     get: &impl Fn(&str) -> Option<String>,
     directory_variable: &'static str,
     digest_variable: &'static str,
     required: bool,
+    bundle_directory: Option<PathBuf>,
 ) -> Result<Option<StageArtifacts>, ConfigError> {
     let directory = get(directory_variable).filter(|value| !value.trim().is_empty());
     let digest = get(digest_variable);
+    let directory = match (directory, bundle_directory) {
+        (Some(_), Some(_)) => {
+            return Err(ConfigError {
+                variable: directory_variable,
+                expected: "unset when the stage's bundle is set",
+            });
+        }
+        (None, Some(bundle)) => {
+            let digest = digest.ok_or(ConfigError {
+                variable: digest_variable,
+                expected: DIGEST_EXPECTED,
+            })?;
+            return Ok(Some(StageArtifacts {
+                directory: bundle,
+                manifest_sha256: parse_sha256(digest.trim()).ok_or(ConfigError {
+                    variable: digest_variable,
+                    expected: DIGEST_EXPECTED,
+                })?,
+            }));
+        }
+        (directory, None) => directory,
+    };
     match (directory, digest) {
         (None, None) if !required => Ok(None),
         (None, _) => Err(ConfigError {
@@ -250,6 +408,26 @@ impl Config {
         )?;
         let embedding = backend(&get, "LENS_EMBEDDING_BACKEND")?;
         let reranking = backend(&get, "LENS_RERANKING_BACKEND")?;
+        let embedding_bundle = bundle(
+            &get,
+            "LENS_EMBEDDING_BUNDLE",
+            "LENS_EMBEDDING_BUNDLE_REVISION",
+            embedding,
+        )?;
+        let reranking_bundle = bundle(
+            &get,
+            "LENS_RERANKING_BUNDLE",
+            "LENS_RERANKING_BUNDLE_REVISION",
+            reranking,
+        )?;
+        let model_cache = model_cache(
+            &get,
+            embedding_bundle.is_some() || reranking_bundle.is_some(),
+        )?;
+        let bundle_directory = |bundle: &Option<StageBundle>| {
+            Option::zip(bundle.as_ref(), model_cache.as_ref())
+                .map(|(bundle, cache)| cache.directory.join(&bundle.bundle))
+        };
         Ok(Self {
             // The range check above keeps the port within u16.
             listen: SocketAddr::new(host, port as u16),
@@ -261,13 +439,18 @@ impl Config {
                 "LENS_EMBEDDING_ARTIFACTS",
                 "LENS_EMBEDDING_MANIFEST_SHA256",
                 is_model_backed(embedding),
+                bundle_directory(&embedding_bundle),
             )?,
             reranking_artifacts: artifacts(
                 &get,
                 "LENS_RERANKING_ARTIFACTS",
                 "LENS_RERANKING_MANIFEST_SHA256",
                 is_model_backed(reranking),
+                bundle_directory(&reranking_bundle),
             )?,
+            embedding_bundle,
+            reranking_bundle,
+            model_cache,
             reference_dimensions: number(
                 &get,
                 "LENS_REFERENCE_DIMENSIONS",
@@ -430,6 +613,125 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(config.reranking, StageBackend::Qwen3);
+    }
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn without_fetch_settings_there_is_nothing_to_fetch() {
+        let config = lookup(&[]).unwrap();
+        assert_eq!(config.embedding_bundle, None);
+        assert_eq!(config.reranking_bundle, None);
+        assert_eq!(config.model_cache, None);
+        // Cache settings without a bundle are refused rather than ignored.
+        let error = lookup(&[("LENS_MODEL_CACHE_DIR", "/var/cache/lens")]).unwrap_err();
+        assert_eq!(error.variable, "LENS_MODEL_CACHE_DIR");
+        let error = lookup(&[("LENS_MODEL_FETCH_TIMEOUT_SECS", "60")]).unwrap_err();
+        assert_eq!(error.variable, "LENS_MODEL_FETCH_TIMEOUT_SECS");
+        let error = lookup(&[("LENS_RERANKING_BUNDLE_REVISION", COMMIT)]).unwrap_err();
+        assert_eq!(error.variable, "LENS_RERANKING_BUNDLE");
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    #[test]
+    fn refuses_a_bundle_in_a_build_without_the_fetcher() {
+        let error = lookup(&[
+            ("LENS_EMBEDDING_BUNDLE", "qwen3-embedding-0.6b-f32-1024d"),
+            ("LENS_EMBEDDING_BUNDLE_REVISION", COMMIT),
+        ])
+        .unwrap_err();
+        assert_eq!(error.variable, "LENS_EMBEDDING_BUNDLE");
+        assert_eq!(error.expected, "unset: this build has no fetch feature");
+    }
+
+    #[cfg(all(feature = "fetch", feature = "qwen3"))]
+    #[test]
+    fn reads_a_pinned_bundle_into_the_cache() {
+        let digest = "0f".repeat(32);
+        let base = [
+            ("LENS_EMBEDDING_BACKEND", "qwen3"),
+            ("LENS_EMBEDDING_BUNDLE", "qwen3-embedding-0.6b-f32-1024d"),
+            ("LENS_EMBEDDING_BUNDLE_REVISION", COMMIT),
+            ("LENS_EMBEDDING_MANIFEST_SHA256", digest.as_str()),
+            ("LENS_MODEL_CACHE_DIR", "/var/cache/lens"),
+        ];
+        let config = lookup(&base).unwrap();
+        assert_eq!(
+            config.embedding_bundle,
+            Some(StageBundle {
+                bundle: "qwen3-embedding-0.6b-f32-1024d".to_owned(),
+                revision: COMMIT.to_owned(),
+            })
+        );
+        let cache = config.model_cache.unwrap();
+        assert_eq!(cache.directory, PathBuf::from("/var/cache/lens"));
+        assert_eq!(cache.file_timeout, DEFAULT_FILE_TIMEOUT);
+        assert_eq!(
+            config.embedding_artifacts.unwrap().directory,
+            PathBuf::from("/var/cache/lens").join("qwen3-embedding-0.6b-f32-1024d")
+        );
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut pairs = base.to_vec();
+            pairs.retain(|(name, _)| extra.iter().all(|(other, _)| other != name));
+            pairs.extend_from_slice(extra);
+            lookup(&pairs)
+        };
+        for (name, value, variable) in [
+            (
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+                "main",
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+            ),
+            (
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+                "v1.0",
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+            ),
+            (
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+                "0123456",
+                "LENS_EMBEDDING_BUNDLE_REVISION",
+            ),
+            (
+                "LENS_EMBEDDING_BUNDLE",
+                "../escape",
+                "LENS_EMBEDDING_BUNDLE",
+            ),
+            ("LENS_EMBEDDING_BUNDLE", "models/x", "LENS_EMBEDDING_BUNDLE"),
+            (
+                "LENS_EMBEDDING_ARTIFACTS",
+                "/srv/lens/embedding",
+                "LENS_EMBEDDING_ARTIFACTS",
+            ),
+            (
+                "LENS_EMBEDDING_BACKEND",
+                "reference",
+                "LENS_EMBEDDING_BUNDLE",
+            ),
+            ("LENS_MODEL_CACHE_DIR", " ", "LENS_MODEL_CACHE_DIR"),
+            (
+                "LENS_MODEL_FETCH_TIMEOUT_SECS",
+                "0",
+                "LENS_MODEL_FETCH_TIMEOUT_SECS",
+            ),
+        ] {
+            let error = with(&[(name, value)]).unwrap_err();
+            assert_eq!(error.variable, variable, "{name}={value}");
+            if value.len() >= 4 {
+                assert!(!error.to_string().contains(value), "{name}");
+            }
+        }
+        let mut no_digest = base.to_vec();
+        no_digest.retain(|(name, _)| *name != "LENS_EMBEDDING_MANIFEST_SHA256");
+        assert_eq!(
+            lookup(&no_digest).unwrap_err().variable,
+            "LENS_EMBEDDING_MANIFEST_SHA256"
+        );
+        let timed = with(&[("LENS_MODEL_FETCH_TIMEOUT_SECS", "600")]).unwrap();
+        assert_eq!(
+            timed.model_cache.unwrap().file_timeout,
+            Duration::from_secs(600)
+        );
     }
 
     #[test]
