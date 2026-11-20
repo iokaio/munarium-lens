@@ -24,11 +24,26 @@ loads Qwen3-Embedding-0.6B and Qwen3-Reranker-0.6B weights and tokenizers
 (Apache-2.0 per their model cards) from an operator-supplied directory; the
 repository and images contain none of them.
 
+The optional `fetch` cargo feature, off by default, adds `ureq` and
+`ureq-proto` (MIT OR Apache-2.0), `rustls` (Apache-2.0 OR ISC OR MIT),
+`rustls-webpki` (ISC), `ring` (Apache-2.0 AND ISC; its source carries
+BoringSSL-derived code under the terms in its license files),
+`webpki-roots` (CDLA-Permissive-2.0: Mozilla's CA root certificates compiled
+in as data), `untrusted` (ISC), `subtle` (BSD-3-Clause) and further MIT OR
+Apache-2.0 crates, with `serde_json` and `sha2` as normal dependencies. A
+binary or image built with `fetch` needs notices generated from that graph,
+including the `ring` and `webpki-roots` license texts. The fetcher downloads
+model bundles from the Munarium distribution locations at run time; the
+bundles keep their upstream licenses and are not part of the binary or
+image.
+
 The [Dockerfile](Dockerfile) builds on the digest-pinned `rust:1.98.1-alpine`
 image and copies the static binary into the digest-pinned
 `gcr.io/distroless/static-debian12:nonroot` image. That runtime base carries
 its own Debian package notices. The default reference image adds no model
-runtime; `--build-arg LENS_FEATURES=qwen3` adds the Candle graph above.
+runtime or HTTP client; `--build-arg LENS_FEATURES=qwen3,fetch` adds the
+Candle and fetcher graphs above, and `--build-arg LENS_FEATURES=qwen3` the
+Candle graph only.
 
 Before distributing a binary or image, generate and review notices from its
 exact shipping dependency graph and runtime image, retain applicable license
