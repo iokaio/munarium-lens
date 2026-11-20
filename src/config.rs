@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Backend selected for one stage.
@@ -14,6 +15,20 @@ pub enum StageBackend {
     Disabled,
     /// The deterministic reference backend. Not a retrieval model.
     Reference,
+    /// Qwen3-Embedding or Qwen3-Reranker on Candle, CPU. Present only in a
+    /// build with the `qwen3` feature.
+    #[cfg(feature = "qwen3")]
+    Qwen3,
+}
+
+/// A verified artifact directory for a model-backed stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageArtifacts {
+    /// Operator-supplied directory holding `lens-manifest.json` and the files
+    /// it lists. Mount it read-only.
+    pub directory: PathBuf,
+    /// Expected SHA-256 of the manifest file's exact bytes.
+    pub manifest_sha256: [u8; 32],
 }
 
 /// Request, batch and admission bounds, applied per stage.
@@ -61,6 +76,10 @@ pub struct Config {
     pub reranking: StageBackend,
     /// Dimension of the reference embedding backend.
     pub reference_dimensions: usize,
+    /// Artifacts of a model-backed embedding stage.
+    pub embedding_artifacts: Option<StageArtifacts>,
+    /// Artifacts of a model-backed reranking stage.
+    pub reranking_artifacts: Option<StageArtifacts>,
     pub limits: Limits,
 }
 
@@ -72,6 +91,8 @@ impl Default for Config {
             embedding: StageBackend::Disabled,
             reranking: StageBackend::Disabled,
             reference_dimensions: 1024,
+            embedding_artifacts: None,
+            reranking_artifacts: None,
             limits: Limits::default(),
         }
     }
@@ -112,6 +133,11 @@ fn number(
     }
 }
 
+#[cfg(feature = "qwen3")]
+const BACKENDS: &str = "disabled, reference or qwen3";
+#[cfg(not(feature = "qwen3"))]
+const BACKENDS: &str = "disabled or reference";
+
 fn backend(
     get: &impl Fn(&str) -> Option<String>,
     variable: &'static str,
@@ -119,10 +145,70 @@ fn backend(
     match get(variable).as_deref().map(str::trim) {
         None | Some("disabled") => Ok(StageBackend::Disabled),
         Some("reference") => Ok(StageBackend::Reference),
+        #[cfg(feature = "qwen3")]
+        Some("qwen3") => Ok(StageBackend::Qwen3),
         Some(_) => Err(ConfigError {
             variable,
-            expected: "disabled or reference",
+            expected: BACKENDS,
         }),
+    }
+}
+
+/// Parse a lowercase 64-character hex SHA-256.
+pub(crate) fn parse_sha256(text: &str) -> Option<[u8; 32]> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let nibble = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
+    };
+    let mut digest = [0u8; 32];
+    for (index, [high, low]) in bytes.as_chunks::<2>().0.iter().enumerate() {
+        digest[index] = (nibble(*high)? << 4) | nibble(*low)?;
+    }
+    Some(digest)
+}
+
+const DIGEST_EXPECTED: &str = "the manifest's lowercase hex SHA-256";
+
+/// Read a stage's artifact directory and manifest digest. Both or neither
+/// must be set, and both are required when `required` is true.
+fn artifacts(
+    get: &impl Fn(&str) -> Option<String>,
+    directory_variable: &'static str,
+    digest_variable: &'static str,
+    required: bool,
+) -> Result<Option<StageArtifacts>, ConfigError> {
+    let directory = get(directory_variable).filter(|value| !value.trim().is_empty());
+    let digest = get(digest_variable);
+    match (directory, digest) {
+        (None, None) if !required => Ok(None),
+        (None, _) => Err(ConfigError {
+            variable: directory_variable,
+            expected: "an artifact directory for the model-backed stage",
+        }),
+        (Some(_), None) => Err(ConfigError {
+            variable: digest_variable,
+            expected: DIGEST_EXPECTED,
+        }),
+        (Some(directory), Some(digest)) => Ok(Some(StageArtifacts {
+            directory: PathBuf::from(directory.trim()),
+            manifest_sha256: parse_sha256(digest.trim()).ok_or(ConfigError {
+                variable: digest_variable,
+                expected: DIGEST_EXPECTED,
+            })?,
+        })),
+    }
+}
+
+fn is_model_backed(backend: StageBackend) -> bool {
+    match backend {
+        StageBackend::Disabled | StageBackend::Reference => false,
+        #[cfg(feature = "qwen3")]
+        StageBackend::Qwen3 => true,
     }
 }
 
@@ -162,12 +248,26 @@ impl Config {
             "milliseconds from 1 to 60000",
             1_000,
         )?;
+        let embedding = backend(&get, "LENS_EMBEDDING_BACKEND")?;
+        let reranking = backend(&get, "LENS_RERANKING_BACKEND")?;
         Ok(Self {
             // The range check above keeps the port within u16.
             listen: SocketAddr::new(host, port as u16),
             allow_unauthenticated_non_loopback: allow,
-            embedding: backend(&get, "LENS_EMBEDDING_BACKEND")?,
-            reranking: backend(&get, "LENS_RERANKING_BACKEND")?,
+            embedding,
+            reranking,
+            embedding_artifacts: artifacts(
+                &get,
+                "LENS_EMBEDDING_ARTIFACTS",
+                "LENS_EMBEDDING_MANIFEST_SHA256",
+                is_model_backed(embedding),
+            )?,
+            reranking_artifacts: artifacts(
+                &get,
+                "LENS_RERANKING_ARTIFACTS",
+                "LENS_RERANKING_MANIFEST_SHA256",
+                is_model_backed(reranking),
+            )?,
             reference_dimensions: number(
                 &get,
                 "LENS_REFERENCE_DIMENSIONS",
@@ -276,9 +376,66 @@ mod tests {
     }
 
     #[test]
+    fn reads_artifacts_in_pairs_with_a_lowercase_digest() {
+        let digest = "ab".repeat(32);
+        let config = lookup(&[
+            ("LENS_EMBEDDING_ARTIFACTS", "/srv/lens/embedding"),
+            ("LENS_EMBEDDING_MANIFEST_SHA256", &digest),
+        ])
+        .unwrap();
+        let artifacts = config.embedding_artifacts.unwrap();
+        assert_eq!(artifacts.directory, PathBuf::from("/srv/lens/embedding"));
+        assert_eq!(artifacts.manifest_sha256, [0xab; 32]);
+        assert_eq!(config.reranking_artifacts, None);
+        let upper = "AB".repeat(32);
+        let error = lookup(&[
+            ("LENS_EMBEDDING_ARTIFACTS", "/srv/lens/embedding"),
+            ("LENS_EMBEDDING_MANIFEST_SHA256", &upper),
+        ])
+        .unwrap_err();
+        assert_eq!(error.variable, "LENS_EMBEDDING_MANIFEST_SHA256");
+        assert!(!error.to_string().contains(&upper));
+        // Each half of a pair needs the other; errors carry no value.
+        let error = lookup(&[("LENS_RERANKING_ARTIFACTS", "/srv/lens/reranker")]).unwrap_err();
+        assert_eq!(error.variable, "LENS_RERANKING_MANIFEST_SHA256");
+        assert!(!error.to_string().contains("/srv/lens"));
+        let error = lookup(&[("LENS_EMBEDDING_MANIFEST_SHA256", &digest)]).unwrap_err();
+        assert_eq!(error.variable, "LENS_EMBEDDING_ARTIFACTS");
+    }
+
+    #[cfg(not(feature = "qwen3"))]
+    #[test]
+    fn refuses_the_qwen3_backend_in_a_build_without_it() {
+        let error = lookup(&[("LENS_EMBEDDING_BACKEND", "qwen3")]).unwrap_err();
+        assert_eq!(error.variable, "LENS_EMBEDDING_BACKEND");
+        assert_eq!(error.expected, "disabled or reference");
+    }
+
+    #[cfg(feature = "qwen3")]
+    #[test]
+    fn requires_artifacts_for_a_qwen3_stage() {
+        let error = lookup(&[("LENS_RERANKING_BACKEND", "qwen3")]).unwrap_err();
+        assert_eq!(error.variable, "LENS_RERANKING_ARTIFACTS");
+        let error = lookup(&[
+            ("LENS_RERANKING_BACKEND", "qwen3"),
+            ("LENS_RERANKING_ARTIFACTS", "/srv/lens/reranker"),
+        ])
+        .unwrap_err();
+        assert_eq!(error.variable, "LENS_RERANKING_MANIFEST_SHA256");
+        let digest = "0f".repeat(32);
+        let config = lookup(&[
+            ("LENS_RERANKING_BACKEND", "qwen3"),
+            ("LENS_RERANKING_ARTIFACTS", "/srv/lens/reranker"),
+            ("LENS_RERANKING_MANIFEST_SHA256", &digest),
+        ])
+        .unwrap();
+        assert_eq!(config.reranking, StageBackend::Qwen3);
+    }
+
+    #[test]
     fn names_the_invalid_variable_without_its_value() {
         for (name, value) in [
-            ("LENS_EMBEDDING_BACKEND", "qwen"),
+            ("LENS_EMBEDDING_BACKEND", "onnx"),
             ("LENS_REFERENCE_DIMENSIONS", "99999"),
             ("LENS_MAX_IN_FLIGHT", "-7"),
             ("LENS_PORT", "70000"),

@@ -20,11 +20,15 @@ use tokio::net::TcpListener;
 mod admission;
 mod backend;
 mod config;
+#[cfg(feature = "qwen3")]
+mod manifest;
+#[cfg(feature = "qwen3")]
+mod qwen3;
 mod reference;
 
 use admission::Admission;
 use backend::{BackendError, EmbeddingBackend, RerankHit, RerankingBackend, ServedIdentity};
-pub use config::{Config, ConfigError, Limits, StageBackend};
+pub use config::{Config, ConfigError, Limits, StageArtifacts, StageBackend};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -131,41 +135,80 @@ fn valid_scores(scores: &[f32], count: usize) -> bool {
     scores.len() == count && scores.iter().all(|score| score.is_finite())
 }
 
+/// Log a content-free load failure category for a stage.
+#[cfg(feature = "qwen3")]
+fn load_failed(stage: &str, error: manifest::ArtifactError) {
+    eprintln!("Lens {stage} stage did not load: {error}");
+}
+
+#[cfg(feature = "qwen3")]
+fn load_qwen3_embedding(config: &Config) -> Option<Arc<dyn EmbeddingBackend>> {
+    let artifacts = config.embedding_artifacts.as_ref()?;
+    match qwen3::Qwen3Embedding::load(
+        &artifacts.directory,
+        &artifacts.manifest_sha256,
+        config.limits.max_input_tokens,
+    ) {
+        Ok(backend) => Some(Arc::new(backend)),
+        Err(error) => {
+            load_failed("embedding", error);
+            None
+        }
+    }
+}
+
+#[cfg(feature = "qwen3")]
+fn load_qwen3_reranking(config: &Config) -> Option<Arc<dyn RerankingBackend>> {
+    let artifacts = config.reranking_artifacts.as_ref()?;
+    match qwen3::Qwen3Reranking::load(
+        &artifacts.directory,
+        &artifacts.manifest_sha256,
+        config.limits.max_input_tokens,
+    ) {
+        Ok(backend) => Some(Arc::new(backend)),
+        Err(error) => {
+            load_failed("reranking", error);
+            None
+        }
+    }
+}
+
 impl AppState {
+    /// Load and probe each configured stage. Model loading reads and hashes
+    /// the artifacts, so call this off the async runtime.
     fn from_config(config: &Config) -> Self {
         let limits = config.limits.clone();
         let admission =
             || Admission::new(limits.max_in_flight, limits.max_queue, limits.queue_timeout);
-        let embedding = match config.embedding {
-            StageBackend::Disabled => StageState::Disabled,
-            StageBackend::Reference => {
-                let backend: Arc<dyn EmbeddingBackend> = Arc::new(
-                    reference::ReferenceEmbedding::new(config.reference_dimensions),
-                );
-                if probe_embedding(backend.as_ref()) {
-                    StageState::Ready {
-                        backend,
-                        admission: admission(),
-                    }
-                } else {
-                    StageState::Failed
-                }
-            }
+        let embedding: Option<Arc<dyn EmbeddingBackend>> = match config.embedding {
+            StageBackend::Disabled => None,
+            StageBackend::Reference => Some(Arc::new(reference::ReferenceEmbedding::new(
+                config.reference_dimensions,
+            ))),
+            #[cfg(feature = "qwen3")]
+            StageBackend::Qwen3 => load_qwen3_embedding(config),
         };
-        let reranking = match config.reranking {
-            StageBackend::Disabled => StageState::Disabled,
-            StageBackend::Reference => {
-                let backend: Arc<dyn RerankingBackend> =
-                    Arc::new(reference::ReferenceReranking::new());
-                if probe_reranking(backend.as_ref()) {
-                    StageState::Ready {
-                        backend,
-                        admission: admission(),
-                    }
-                } else {
-                    StageState::Failed
-                }
-            }
+        let embedding = match (config.embedding, embedding) {
+            (StageBackend::Disabled, _) => StageState::Disabled,
+            (_, Some(backend)) if probe_embedding(backend.as_ref()) => StageState::Ready {
+                backend,
+                admission: admission(),
+            },
+            _ => StageState::Failed,
+        };
+        let reranking: Option<Arc<dyn RerankingBackend>> = match config.reranking {
+            StageBackend::Disabled => None,
+            StageBackend::Reference => Some(Arc::new(reference::ReferenceReranking::new())),
+            #[cfg(feature = "qwen3")]
+            StageBackend::Qwen3 => load_qwen3_reranking(config),
+        };
+        let reranking = match (config.reranking, reranking) {
+            (StageBackend::Disabled, _) => StageState::Disabled,
+            (_, Some(backend)) if probe_reranking(backend.as_ref()) => StageState::Ready {
+                backend,
+                admission: admission(),
+            },
+            _ => StageState::Failed,
         };
         Self {
             embedding,
@@ -527,7 +570,11 @@ pub async fn serve_with(
         ));
     }
     eprintln!("Lens listening on {address}");
-    let state = Arc::new(AppState::from_config(config));
+    let owned = config.clone();
+    let state = tokio::task::spawn_blocking(move || AppState::from_config(&owned))
+        .await
+        .map_err(io::Error::other)?;
+    let state = Arc::new(state);
     for (stage, state) in [
         ("embedding", state.embedding.label()),
         ("reranking", state.reranking.label()),

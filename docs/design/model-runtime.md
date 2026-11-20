@@ -19,7 +19,9 @@ thresholds stay open until LENS-2 measures them, as listed under
 | Instruction prefixes | **Accepted:** Server owns them; Lens applies none | Consistent with the [endpoint profile](endpoint-profile.md#lens-1-implemented-profile-clarifications-proposed). Each embedding input and rerank query arrives as the effective text. Lens owns only the model's fixed template, such as the reranker's chat frame. The identity still records both. |
 | Runtime | **Accepted:** Candle (`candle-core`, `candle-nn` and `candle-transformers` 0.11.1), first on CPU behind an opt-in `qwen3` cargo feature. The maintainer noted the choice can be altered later if needed. | The default build stays the reference-only build without ML dependencies. Candle loads publisher safetensors directly and builds statically. If Candle misses the LENS-2 latency gate, a GPU build, ONNX Runtime or a sidecar can be proposed as a change to this decision. |
 
-Until a model-backed profile is qualified,
+The [Qwen3 backend page](qwen3-backend.md) describes the implementation
+behind the `qwen3` feature, its manifest verification and indicative
+measurements. Until a model-backed profile is qualified,
 the release image serves only the deterministic reference backend, which is
 not a retrieval model. Every backend plugs into the per-stage interfaces in
 `src/backend.rs` without a wire change: the backend reports its served

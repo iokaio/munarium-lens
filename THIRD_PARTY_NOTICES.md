@@ -13,10 +13,22 @@ The repository ships synthetic fixtures and no dependency source archive or
 model assets. The deterministic reference backend is original code and uses
 no model, tokenizer or dataset.
 
+The optional `qwen3` cargo feature, off by default, adds Candle
+(`candle-core`, `candle-nn`, `candle-transformers`; MIT OR Apache-2.0),
+Hugging Face `tokenizers` (Apache-2.0), `sha2` (MIT OR Apache-2.0) and
+`serde_json` as a normal dependency, with their transitive crates. Every
+crate in that graph offers a permissive license; see the
+[backend design](docs/design/qwen3-backend.md). A binary or image built with
+the feature needs notices generated from that larger graph. The feature
+loads Qwen3-Embedding-0.6B and Qwen3-Reranker-0.6B weights and tokenizers
+(Apache-2.0 per their model cards) from an operator-supplied directory; the
+repository and images contain none of them.
+
 The [Dockerfile](Dockerfile) builds on the digest-pinned `rust:1.98.1-alpine`
 image and copies the static binary into the digest-pinned
 `gcr.io/distroless/static-debian12:nonroot` image. That runtime base carries
-its own Debian package notices. The reference image adds no model runtime.
+its own Debian package notices. The default reference image adds no model
+runtime; `--build-arg LENS_FEATURES=qwen3` adds the Candle graph above.
 
 Before distributing a binary or image, generate and review notices from its
 exact shipping dependency graph and runtime image, retain applicable license

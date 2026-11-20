@@ -53,7 +53,9 @@ lists every refusal code and the order of checks.
 |---|---|---|
 | `LENS_HOST`, `LENS_PORT` | `127.0.0.1`, `8787` | Listener address. A non-loopback host also needs the next variable. |
 | `LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK` | `0` | `1` permits a non-loopback listener. Lens has no service authentication yet; use it only inside an isolated container network. |
-| `LENS_EMBEDDING_BACKEND`, `LENS_RERANKING_BACKEND` | `disabled` | `disabled` or `reference`. |
+| `LENS_EMBEDDING_BACKEND`, `LENS_RERANKING_BACKEND` | `disabled` | `disabled` or `reference`, and `qwen3` in a build with that feature. |
+| `LENS_EMBEDDING_ARTIFACTS`, `LENS_RERANKING_ARTIFACTS` | unset | Artifact directory of a `qwen3` stage. |
+| `LENS_EMBEDDING_MANIFEST_SHA256`, `LENS_RERANKING_MANIFEST_SHA256` | unset | Expected SHA-256 of that directory's `lens-manifest.json`. |
 | `LENS_REFERENCE_DIMENSIONS` | `1024` | Reference embedding dimension, 1–4096. Part of the served name. |
 | `LENS_MAX_BODY_BYTES` | `262144` | Largest request body. |
 | `LENS_MAX_ITEMS` | `64` | Most embedding inputs or rerank documents per request. |
@@ -63,6 +65,42 @@ lists every refusal code and the order of checks.
 
 The defaults are placeholders for local checks, not measured capacity. An
 invalid value stops startup with a message naming the variable.
+
+## Qwen3 backend (optional feature)
+
+The `qwen3` feature adds Qwen3-Embedding-0.6B and Qwen3-Reranker-0.6B on
+Candle, CPU only. It is off by default and is not qualified; see the
+[backend design](../design/qwen3-backend.md). Lens never downloads weights.
+Obtain the publisher's `config.json`, `tokenizer.json` and
+`model.safetensors` for each model at the pinned revisions yourself, into a
+directory outside the repository or under the ignored `models/`. Check their
+SHA-256 values against the publisher's, then write a manifest for each and
+note the printed digest:
+
+```sh
+python scripts/lens_manifest.py --stage embedding --served-model qwen3-embedding-0.6b-f32-1024d --repository Qwen/Qwen3-Embedding-0.6B --revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3 models/qwen3-embedding-0.6b
+python scripts/lens_manifest.py --stage reranking --served-model qwen3-reranker-0.6b-f32 --repository Qwen/Qwen3-Reranker-0.6B --revision e61197ed45024b0ed8a2d74b80b4d909f1255473 models/qwen3-reranker-0.6b
+cargo build --locked --release --features qwen3
+LENS_EMBEDDING_BACKEND=qwen3 LENS_EMBEDDING_ARTIFACTS=models/qwen3-embedding-0.6b LENS_EMBEDDING_MANIFEST_SHA256=<digest> \
+LENS_RERANKING_BACKEND=qwen3 LENS_RERANKING_ARTIFACTS=models/qwen3-reranker-0.6b LENS_RERANKING_MANIFEST_SHA256=<digest> \
+  target/release/munarium-lens
+```
+
+Loading takes about a minute and needs about 6 GiB of memory for both
+stages. Readiness then reports `"backend":"qwen3"`, `"retrieval_model":true`
+and each manifest digest. Lens applies no instruction, so send the query
+prefixes Server would apply, for example the JSON rerank `query`
+`"<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: What grows in an orchard?"`.
+The [backend design](../design/qwen3-backend.md) explains which parts of the
+reranker prompt are Lens's template and which are Server's instruction.
+A wrong digest, a changed file or an unsafe path leaves the stage `failed`
+and logs one category such as `manifest_digest_mismatch`.
+
+The opt-in test compares both models with their model cards:
+
+```sh
+LENS_QWEN3_TEST_DIR=models cargo test --release --features qwen3 -- --ignored --nocapture
+```
 
 ## Reference container
 

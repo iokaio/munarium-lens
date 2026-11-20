@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add the optional `qwen3` cargo feature, off by default: Qwen3-Embedding-0.6B
+  and Qwen3-Reranker-0.6B on Candle 0.11.1, CPU, FP32. Embedding uses
+  last-token pooling and L2 normalization at 1,024 dimensions; reranking uses
+  the model card's chat template and returns `logit(yes) - logit(no)`. Lens
+  adds no instruction text. Each stage loads only from an operator-supplied
+  directory whose `lens-manifest.json` matches a configured SHA-256 and whose
+  listed files match their sizes and digests. Readiness then reports
+  `retrieval_model: true` and `manifest_sha256`. New variables:
+  `LENS_*_ARTIFACTS` and `LENS_*_MANIFEST_SHA256`; `scripts/lens_manifest.py`
+  writes a manifest. Model loading now runs off the async runtime. The
+  default build and its dependency graph are unchanged. The Dockerfile accepts
+  `--build-arg LENS_FEATURES=qwen3`, and its image labels now name the
+  features. Indicative parity and latency from a development laptop are in
+  the [backend design](docs/design/qwen3-backend.md).
 - Record the maintainer decisions of 20 November 2026: Qwen3-Embedding-0.6B
   and Qwen3-Reranker-0.6B at 1,024 dimensions are accepted, and Server owns
   instruction prefixes while Lens applies none. The maintainer also confirmed

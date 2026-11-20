@@ -13,6 +13,19 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 serde = { version = "=1.0.229", features = ["derive"] }
 tokio = { version = "=1.53.3", features = ["macros", "net", "rt", "signal", "sync", "time"] }
 
+# Optional `qwen3` backend: pure-Rust CPU inference with Candle. Off by default
+# so the reference build carries no ML dependencies.
+candle-core = { version = "=0.11.1", default-features = false, optional = true }
+candle-nn = { version = "=0.11.1", default-features = false, optional = true }
+candle-transformers = { version = "=0.11.1", default-features = false, optional = true }
+serde_json = { version = "=1.0.154", optional = true }
+sha2 = { version = "=0.11.1", optional = true }
+tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy-regex"], optional = true }
+
+[features]
+default = []
+qwen3 = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:serde_json", "dep:sha2", "dep:tokenizers"]
+
 [dev-dependencies]
 serde_json = "=1.0.154"
 tokio = { version = "=1.53.3", features = ["io-util", "sync", "time"] }

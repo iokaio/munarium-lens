@@ -27,7 +27,7 @@ pub(crate) struct ServedIdentity {
 pub(crate) enum BackendError {
     /// The loaded runtime could not run the work.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "qwen3")),
         expect(
             dead_code,
             reason = "model runtime adapters return it; the reference backend cannot fail"
