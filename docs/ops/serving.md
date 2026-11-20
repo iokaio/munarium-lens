@@ -13,7 +13,10 @@ procedure below remains the target for the model-backed image.
    at a deployment-specified path such as `/models`.
 2. Configure stage-to-manifest bindings and limits from the exact qualification
    receipt. Use approved device and runtime versions, service credentials and
-   private connectivity. Disable serving-time egress and model downloads.
+   private connectivity. Disable serving-time egress and model downloads,
+   or, with the opt-in [startup fetch](../../README.md#fetching-at-startup),
+   allow HTTPS egress only to the documented Hugging Face and GitHub download
+   hosts and mount a writable cache volume.
 3. Check liveness, then require readiness evidence for the intended stage,
    exact served identity and successful synthetic profile probe before adding
    the worker to routing. `GET /readyz` returns HTTP 200 only when every

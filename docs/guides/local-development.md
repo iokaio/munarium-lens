@@ -12,8 +12,10 @@ cargo test --locked --offline
 cargo build --locked --offline
 ```
 
-To check the feature graph as well, add `--features qwen3` to the clippy and
-test commands. With [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)
+To check the feature graphs as well, repeat the clippy and test commands with
+`--features fetch`, `--features qwen3` and `--features qwen3,fetch`. The
+fetcher's tests use a local in-process HTTP server on `127.0.0.1` and never
+contact Hugging Face or GitHub. With [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)
 installed, `cargo deny check` and `cargo deny --all-features check` apply the
 license, advisory, ban and source policy in [`deny.toml`](../../deny.toml),
 as the advisory supply-chain workflow does.
@@ -62,6 +64,10 @@ lists every refusal code and the order of checks.
 | `LENS_EMBEDDING_BACKEND`, `LENS_RERANKING_BACKEND` | `disabled` | `disabled` or `reference`, and `qwen3` in a build with that feature. |
 | `LENS_EMBEDDING_ARTIFACTS`, `LENS_RERANKING_ARTIFACTS` | unset | Artifact directory of a `qwen3` stage. |
 | `LENS_EMBEDDING_MANIFEST_SHA256`, `LENS_RERANKING_MANIFEST_SHA256` | unset | Expected SHA-256 of that directory's `lens-manifest.json`. |
+| `LENS_EMBEDDING_BUNDLE`, `LENS_RERANKING_BUNDLE` | unset | `fetch` builds: bundle fetched for a `qwen3` stage at startup. Replaces `LENS_*_ARTIFACTS`. |
+| `LENS_EMBEDDING_BUNDLE_REVISION`, `LENS_RERANKING_BUNDLE_REVISION` | unset | Pinned Hugging Face commit of that bundle, 40 lowercase hex characters. |
+| `LENS_MODEL_CACHE_DIR` | unset | Writable directory that fetched bundles go into, outside any Lens checkout. Required with a bundle. |
+| `LENS_MODEL_FETCH_TIMEOUT_SECS` | `3600` | Total time allowed to download one file, 1–86400. Only with a bundle. |
 | `LENS_REFERENCE_DIMENSIONS` | `1024` | Reference embedding dimension, 1–4096. Part of the served name. |
 | `LENS_MAX_BODY_BYTES` | `262144` | Largest request body. |
 | `LENS_MAX_ITEMS` | `64` | Most embedding inputs or rerank documents per request. |
@@ -76,8 +82,11 @@ invalid value stops startup with a message naming the variable.
 
 The `qwen3` feature adds Qwen3-Embedding-0.6B and Qwen3-Reranker-0.6B on
 Candle, CPU only. It is off by default and is not qualified; see the
-[backend design](../design/qwen3-backend.md). Lens never downloads weights.
-Obtain the publisher's `config.json`, `tokenizer.json` and
+[backend design](../design/qwen3-backend.md). A `qwen3` build alone never
+downloads anything. Adding the `fetch` feature lets Lens download a
+published, pinned bundle from the fixed Munarium locations (see
+[Fetching a published bundle](#fetching-a-published-bundle)); the steps here
+use the publisher's files instead. Obtain the publisher's `config.json`, `tokenizer.json` and
 `model.safetensors` for each model at the pinned revisions yourself, into a
 directory outside the repository or under the ignored `models/`. Check their
 SHA-256 values against the publisher's, then write a manifest for each and
@@ -108,6 +117,36 @@ The opt-in test compares both models with their model cards:
 LENS_QWEN3_TEST_DIR=models cargo test --release --features qwen3 -- --ignored --nocapture
 ```
 
+## Fetching a published bundle
+
+Once the maintainer has published a bundle, a build with the `fetch` feature
+can download it from `huggingface.co/iokaio/munarium-lens-models`, falling
+back to the `models/<bundle>` GitHub release. Neither location nor the order
+can be changed. Take the commit and manifest digest from the
+[model runtime decision](../design/model-runtime.md) or the release notes,
+and use a cache directory outside the checkout; Lens refuses one inside a
+Lens source tree.
+
+```sh
+cargo build --locked --release --features qwen3,fetch
+target/release/munarium-lens fetch --bundle qwen3-embedding-0.6b-f32-1024d \
+  --revision <40-char-commit> --manifest-sha256 <digest> --cache-dir ~/.cache/munarium-lens
+```
+
+The command prints the verified digest. Then either point
+`LENS_EMBEDDING_ARTIFACTS` at `~/.cache/munarium-lens/qwen3-embedding-0.6b-f32-1024d`
+or let Lens fetch at startup:
+
+```sh
+LENS_EMBEDDING_BACKEND=qwen3 LENS_EMBEDDING_BUNDLE=qwen3-embedding-0.6b-f32-1024d \
+LENS_EMBEDDING_BUNDLE_REVISION=<40-char-commit> LENS_EMBEDDING_MANIFEST_SHA256=<digest> \
+LENS_MODEL_CACHE_DIR=~/.cache/munarium-lens target/release/munarium-lens
+```
+
+A verified copy already in the cache loads without any connection. The
+[README](../../README.md#downloading) describes the URLs, redirect hosts,
+time limits and failure categories.
+
 ## Reference container
 
 The [Dockerfile](../../Dockerfile) builds a static binary on a distroless base
@@ -122,6 +161,43 @@ docker run --rm -p 127.0.0.1:8787:8787 -e LENS_HOST=0.0.0.0 -e LENS_ALLOW_UNAUTH
 Without those variables the container listens on its own loopback interface
 and reports no ready stage. `docker stop` sends SIGTERM and Lens finishes
 accepted requests before it exits.
+
+## Model container
+
+`--build-arg LENS_FEATURES=qwen3,fetch` builds the model image: the Candle
+backend and the fetcher, with no weights. Give it a writable volume at
+`/var/cache/lens`, which the image creates owned by its non-root user, and
+keep the root filesystem read-only:
+
+```sh
+docker build --build-arg LENS_FEATURES=qwen3,fetch -t munarium-lens-qwen3:local .
+docker volume create lens-models
+docker run --rm --read-only -p 127.0.0.1:8787:8787 -v lens-models:/var/cache/lens \
+  -e LENS_HOST=0.0.0.0 -e LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK=1 \
+  -e LENS_MODEL_CACHE_DIR=/var/cache/lens \
+  -e LENS_EMBEDDING_BACKEND=qwen3 -e LENS_EMBEDDING_BUNDLE=qwen3-embedding-0.6b-f32-1024d \
+  -e LENS_EMBEDDING_BUNDLE_REVISION=<40-char-commit> -e LENS_EMBEDDING_MANIFEST_SHA256=<digest> \
+  munarium-lens-qwen3:local
+```
+
+The same image runs `fetch` as a one-off job, for example in a Kubernetes
+init container that fills a volume before the serving container starts:
+
+```sh
+docker run --rm --read-only -v lens-models:/var/cache/lens munarium-lens-qwen3:local \
+  fetch --bundle qwen3-embedding-0.6b-f32-1024d --revision <40-char-commit> \
+  --manifest-sha256 <digest> --cache-dir /var/cache/lens
+```
+
+On Kubernetes, mount an `emptyDir` (downloaded again on every new pod) or a
+persistent volume claim (kept across restarts) at `/var/cache/lens`, set
+`readOnlyRootFilesystem: true`, and allow egress on port 443 only to the hosts
+listed in the [README](../../README.md#downloading). Lens ignores proxy
+variables. A first start downloads about 1.2 GB per stage before readiness, so
+use a startup probe with enough time. The image trusts the Mozilla root
+certificates compiled into the binary (`webpki-roots`), not the base
+image's certificate store. `--build-arg LENS_FEATURES=qwen3` builds the same
+backend without an HTTP client, for bundles mounted read-only instead.
 
 Run the contributor checks in [Contributing](../../CONTRIBUTING.md) before
 opening a pull request. See the [serving guide](../ops/serving.md) for

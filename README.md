@@ -30,11 +30,15 @@ Lens model files are published in two places with the same bytes:
 | [`huggingface.co/iokaio/munarium-lens-models`](https://huggingface.co/iokaio/munarium-lens-models) | Primary. A Hugging Face model repository holding every model bundle Lens serves. |
 | [GitHub Releases of `iokaio/munarium-lens`](https://github.com/iokaio/munarium-lens/releases) | Backup. Each bundle is also attached to a release, so a deployment still works if the primary is unavailable. |
 
-**Status: location decided 20 November 2026; download support planned.** Lens
-does not download anything yet. Today an operator fetches a bundle by hand
-(see [Fetching a bundle by hand](#fetching-a-bundle-by-hand)) and points
-`LENS_EMBEDDING_ARTIFACTS` or `LENS_RERANKING_ARTIFACTS` at it. Everything below
-marked *planned* describes the intended behavior, not current code.
+**Status: location decided 20 November 2026; download support implemented
+behind the opt-in `fetch` cargo feature.** A Lens built with `fetch` can
+download a pinned bundle with `munarium-lens fetch` or at startup (see
+[Downloading](#downloading)). Every other build, and a `fetch` build without
+bundle settings, downloads nothing: the operator fetches a bundle by hand (see
+[Fetching a bundle by hand](#fetching-a-bundle-by-hand)) and points
+`LENS_EMBEDDING_ARTIFACTS` or `LENS_RERANKING_ARTIFACTS` at it.
+There is nothing to pin until the maintainer publishes a bundle and records
+its commit and manifest digest (see [Publishing a bundle](#publishing-a-bundle)).
 
 ### What is published
 
@@ -102,43 +106,117 @@ stage `failed` and readiness at 503.
 - Release assets are immutable once published, matching the rule that a bundle
   is never edited. A corrected bundle gets a new name and a new tag.
 
-### Downloading (planned)
+### Downloading
 
-Planned behavior, labelled so until implemented:
+A Lens built with the `fetch` cargo feature downloads a pinned bundle in one
+of two explicit ways. A build without the feature has no HTTP client or TLS
+stack at all.
 
-- **Off by default.** With no download setting, Lens behaves exactly as it does
-  today: it loads only from the operator-supplied artifact directory and makes
-  no outbound connection.
-- **Explicit, before serving.** Downloads happen through an explicit fetch step
-  (a `munarium-lens fetch` subcommand), or at startup when the operator enables
-  it. They never happen while a request is being served. A stage stays `failed`
-  until its bundle is present and verified.
-- **Source order.** Hugging Face first, then the GitHub release, configurable.
-  Lens fetches by the pinned commit and bundle name. It never follows a branch,
-  a `latest` tag or a redirect to an unexpected host.
-- **Safe writes.** Each file streams into a temporary file in the target
-  directory, is checked against the manifest's size and SHA-256, and is then
-  renamed into place. A partial or wrong download is discarded and never loaded.
-  Files already present and verified are not fetched again.
-- **No credentials needed.** Both locations are public. Lens neither requires
-  nor logs a token, and logs no file paths or values on a verification failure.
-- **Network surface.** Fetching needs outbound HTTPS to `huggingface.co` (and
-  the Hugging Face CDN hosts it redirects to) or to `github.com` (and the GitHub
-  release-asset host). Standard proxy settings apply. A serving Lens with
-  downloads off needs no egress.
-- **Offline and air-gapped hosts.** Fetch on a connected host, copy the bundle
-  directory, and point `LENS_*_ARTIFACTS` at it. The pinned manifest digest
-  proves the copy is intact.
-- **Dependency policy.** A built-in fetcher needs an HTTP client and a TLS
-  stack, which the current [`deny.toml`](deny.toml) bans on purpose for the
-  serving build. The fetcher will therefore sit behind its own cargo feature,
-  off by default, and its policy exception needs maintainer review. The default
-  serving image stays free of HTTP clients and TLS.
+- **Off by default.** With no bundle settings, Lens behaves exactly as before:
+  it loads only from the operator-supplied artifact directory and makes no
+  outbound connection.
+- **Two fixed locations, in a fixed order.** Lens downloads only from
+  `https://huggingface.co/iokaio/munarium-lens-models` and, if that fails, from
+  `https://github.com/iokaio/munarium-lens/releases/download/`. Both are
+  compile-time constants. There is no setting or option for another base URL,
+  a mirror, a different order or skipping Hugging Face, and Lens makes no
+  other outbound connection for any reason.
+- **URLs.** Hugging Face:
+  `https://huggingface.co/iokaio/munarium-lens-models/resolve/<commit>/<bundle>/<file>`.
+  GitHub: `https://github.com/iokaio/munarium-lens/releases/download/models/<bundle>/<file>`.
+  The tag `models/<bundle>` keeps its `/` unencoded, as GitHub's own
+  `browser_download_url` does for such tags. Release assets are flat, so a
+  bundle file in a subdirectory can come only from Hugging Face.
+- **Manifest first.** Lens downloads `lens-manifest.json` (at most 64 KiB),
+  requires the pinned SHA-256, checks it with the same code that loads a stage
+  (schema, safe relative paths, digests) and requires its `served_model` to
+  equal the bundle name. Only then does it download the files the manifest
+  lists, and nothing else. If Hugging Face serves a different manifest, the
+  GitHub copy is tried; if neither matches, no file is downloaded.
+- **Redirects.** Followed manually, at most 5 per file, and only over HTTPS on
+  port 443 to the hosts of the location being used: `huggingface.co` (which
+  redirects small files to its own `/api/resolve-cache/` path),
+  `cas-bridge.xethub.hf.co`, `cdn-lfs.hf.co`, `cdn-lfs-us-1.hf.co` and
+  `cdn-lfs-eu-1.hf.co` for Hugging Face; `github.com`,
+  `release-assets.githubusercontent.com` and `objects.githubusercontent.com`
+  for GitHub. Any other target, user information in a URL or a downgrade to
+  HTTP is refused before connecting.
+- **Safe writes.** Each file streams into a `.lens-partial-*` temporary file in
+  its target directory, is cut off at the manifest's size, and must match the
+  size and SHA-256 exactly. It is then flushed to disk and renamed into place
+  atomically. A failed download removes its temporary file and never leaves
+  anything under the final name; the next source is then tried. Temporaries
+  left by an interrupted process are removed on the next fetch. Files already
+  present and verified are not downloaded again, and the manifest is written
+  last. Finally the whole directory is verified again from disk.
+- **Time bounds.** 30 s to resolve and connect, 60 s for response headers,
+  60 s for any single read, and a total per file of
+  `LENS_MODEL_FETCH_TIMEOUT_SECS` (default 3600) including redirects.
+  Interrupted downloads restart from the beginning; there is no resume.
+- **No credentials.** Both locations are public. Lens sends no token, reads no
+  proxy variables (`HTTPS_PROXY` and similar are ignored, so the host needs
+  direct HTTPS egress to the hosts above) and accepts no extra headers.
+  Failures log one fixed category per attempt, for example
+  `Lens fetch: file from huggingface failed: file_digest_mismatch`, with no
+  URL, path or value.
+
+#### The `fetch` subcommand
+
+```sh
+munarium-lens fetch --bundle qwen3-embedding-0.6b-f32-1024d \
+  --revision <40-char-commit> --manifest-sha256 <digest> \
+  --cache-dir /var/cache/lens [--timeout-secs 3600]
+```
+
+It writes `<cache-dir>/<bundle>/`, prints the verified manifest digest on
+standard output and exits 0. A failed fetch prints its category and exits 1; a
+usage error exits 2. The revision must be a full 40-character lowercase commit
+id: `main`, other branch names, tags and short ids are refused. There is no
+option for a source, URL or order. The cache directory must not be inside a
+Munarium Lens source checkout.
+
+#### Fetching at startup
+
+| Variable | Meaning |
+|---|---|
+| `LENS_EMBEDDING_BUNDLE`, `LENS_RERANKING_BUNDLE` | Bundle name (the manifest's `served_model`). Only for a `qwen3` stage, and only in a build with `fetch`; other builds refuse the setting. |
+| `LENS_EMBEDDING_BUNDLE_REVISION`, `LENS_RERANKING_BUNDLE_REVISION` | Pinned Hugging Face commit, 40 lowercase hex characters. Required with the bundle. |
+| `LENS_EMBEDDING_MANIFEST_SHA256`, `LENS_RERANKING_MANIFEST_SHA256` | The existing manifest digest pin. Required. |
+| `LENS_MODEL_CACHE_DIR` | Writable directory for all bundles; each goes to `<dir>/<bundle>`. Required with a bundle and refused without one. Must not be inside a Munarium Lens source checkout. |
+| `LENS_MODEL_FETCH_TIMEOUT_SECS` | Total time allowed per file, 1 to 86400 seconds. Default 3600. |
+
+With a bundle set, the stage's artifact directory is `<cache>/<bundle>`, so
+`LENS_*_ARTIFACTS` must stay unset. At startup Lens first verifies the cache
+copy exactly as it would an operator-supplied directory. A complete, verified
+copy loads with no connection at all. If the manifest or a listed file is
+missing or does not match, Lens downloads what is missing or wrong, then
+verifies and loads the directory as usual. This happens while the stages load,
+before Lens answers any request; it never happens during request handling. If
+the fetch or the verification fails, the stage stays `failed`, readiness
+returns 503 and the log names one category. Lens does not retry until it is
+restarted.
+
+In a container, use the `qwen3,fetch` image variant (see the
+[local walkthrough](docs/guides/local-development.md#model-container)) with a
+writable volume, such as a Kubernetes `emptyDir` or a persistent volume claim,
+mounted at the cache directory, and a read-only root filesystem. A persistent
+volume keeps the bundle across restarts, so a restart makes no connection.
+
+- **Offline and air-gapped hosts.** Run `munarium-lens fetch` on a connected
+  host, or fetch by hand, copy the bundle directory, and point
+  `LENS_*_ARTIFACTS` at it read-only. The pinned manifest digest proves the copy
+  is intact.
+- **Dependency policy.** The fetcher uses `ureq` 3.5.2 with `rustls` 0.23 (the
+  `ring` provider) and the compiled-in `webpki-roots` trust store: no OpenSSL,
+  no platform TLS. [`deny.toml`](deny.toml) allows exactly these crates, only
+  through their expected parents, as an exception the maintainer approved on
+  20 November 2026 for these two locations only. The default reference build
+  and image contain none of them.
 
 ### Fetching a bundle by hand
 
-Until download support lands, use either location directly, then pin the digest
-that `lens-manifest.json` produces:
+Without the `fetch` feature, or to inspect a bundle first, use either
+location directly, then pin the digest that `lens-manifest.json` produces:
 
 ```sh
 # From Hugging Face, at a pinned commit (requires the `hf` CLI)

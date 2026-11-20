@@ -26,6 +26,23 @@ reasoning, pending maintainer acceptance. None of the crates compiles C or
 C++ code or downloads anything at build or run time. Candle runs on CPU in FP32; its
 CUDA and Metal features stay off.
 
+A `qwen3` build alone never downloads weights at run time: each stage loads
+from a directory the operator supplies. The separate, opt-in `fetch` feature
+(maintainer decision, 20 November 2026) adds a fetcher that can download a
+pinned bundle into a writable cache, either with `munarium-lens fetch` or at
+startup, only from the fixed Hugging Face repository
+`huggingface.co/iokaio/munarium-lens-models` and, if that fails, the fixed
+`models/<bundle>` release of this repository. The locations and their order
+are compile-time constants; Lens makes no other outbound connection, and
+never fetches during request handling. The fetched directory then passes the
+verification below unchanged. `fetch` adds `ureq` 3.5.2 with `rustls` 0.23,
+the `ring` crypto provider and `webpki-roots`: 24 more runtime crates on the
+musl target (68 against 44 for the default build; 186 with `qwen3` as well).
+Unlike the `qwen3` graph, `ring` compiles C and assembly at build time with
+the musl toolchain (through the `cc` build dependency); no OpenSSL or
+platform TLS is linked. The [README](../../README.md#downloading)
+specifies the URLs, redirect hosts, writes, time limits and settings.
+
 ## Configuration
 
 | Variable | Meaning |
@@ -36,6 +53,12 @@ CUDA and Metal features stay off.
 
 `LENS_MAX_INPUT_TOKENS` must not exceed the model's `max_position_embeddings`,
 or the stage does not load.
+
+In a build that also has `fetch`, a stage can instead set
+`LENS_*_BUNDLE`, `LENS_*_BUNDLE_REVISION` and `LENS_MODEL_CACHE_DIR` with
+the same `LENS_*_MANIFEST_SHA256`. Its artifact directory is then
+`<cache>/<bundle>`, filled at startup if missing or damaged; see the
+[README](../../README.md#fetching-at-startup).
 
 ## Artifact manifest and verification
 
@@ -175,11 +198,16 @@ LENS_QWEN3_TEST_DIR=models cargo test --release --features qwen3 -- --ignored --
 
 ## Container image
 
-The [Dockerfile](../../Dockerfile) builds a `qwen3` variant with
-`--build-arg LENS_FEATURES=qwen3`; the default build argument is empty and
-produces the reference image. The variant uses the same static musl builder
-and distroless runtime, because the feature graph is pure Rust. No glibc
-base or native library is needed. Weights stay outside the image:
+The [Dockerfile](../../Dockerfile) builds two model variants; the default
+build argument is empty and produces the reference image. Both use the same
+static musl builder and distroless runtime, and no variant contains weights.
+
+- `--build-arg LENS_FEATURES=qwen3,fetch` is the model image. It downloads
+  the pinned bundles at startup into a writable volume at `/var/cache/lens`,
+  so the image stays small, and runs with a read-only root filesystem. See
+  the [model container walkthrough](../guides/local-development.md#model-container).
+- `--build-arg LENS_FEATURES=qwen3` has no HTTP client, for hosts that mount
+  the bundles read-only:
 
 ```sh
 docker build --build-arg LENS_FEATURES=qwen3 -t munarium-lens-qwen3:local .
@@ -196,6 +224,19 @@ a two-pair rerank of 170 tokens in total took 4.2 to 4.8 s, and the container us
 4.5 GiB. Musl's allocator and the absence of a GPU are LENS-2 questions; a
 GPU build would need a glibc base with CUDA libraries and is not provided.
 No variant image is published.
+
+With the fetcher, on 20 November 2026 under Docker Desktop: the
+`qwen3,fetch` image is 15.6 MB and the reference image 4.35 MB. With a
+read-only root filesystem and a named volume at `/var/cache/lens`, a
+`fetch` for a deliberately non-existent pin completed HTTPS to both
+`huggingface.co` and `github.com` with the compiled-in `webpki-roots` and
+received 404 from each (`not_found`), leaving only an empty bundle
+directory. Without a writable mount the same command fails with
+`write_failed` before any connection. A manual `HEAD` of a small file under
+`huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/<pinned commit>/` returned
+`307` to a same-host `/api/resolve-cache/` path; the CDN hosts used for large
+files were not observed directly and come from Hugging Face's documented
+storage hosts.
 
 ## Open questions
 
@@ -220,3 +261,11 @@ Still open:
   Candle's Qwen3 model does not take; a Lens-owned model variant or a GPU
   build is a LENS-2 decision.
 - **Manifest canonical form and importer.** See the artifact design.
+- **Fetcher download hosts.** Confirm the Hugging Face CDN host (`cas-bridge.xethub.hf.co`
+  for Xet storage, `cdn-lfs*.hf.co` for LFS) and the GitHub release-asset
+  host that the first published bundle actually redirects to, and trim the
+  allowlist to them. A host outside the list fails closed.
+- **Proxies.** The fetcher reads no proxy variables, following the rule that
+  Lens contacts only the two locations. A deployment behind an egress proxy
+  needs either a direct route to the listed hosts or a maintainer decision to
+  permit a configured HTTPS `CONNECT` proxy.

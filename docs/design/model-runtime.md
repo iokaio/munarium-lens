@@ -33,7 +33,11 @@ vectors or scores that the server validates before replying.
 These follow from the existing designs and narrow the choice.
 
 - Weights stay outside the image and load from a verified, read-only mount.
-  Serving runs with downloads and outbound network disabled. Build-time or
+  Serving runs with downloads and outbound network disabled. (Since the
+  maintainer decision of 20 November 2026, the opt-in `fetch` feature may
+  download pinned, verified bundles before serving, only from the two fixed
+  Munarium locations; see the [README](../../README.md#downloading). The
+  runtime itself still downloads nothing.) Build-time or
   run-time binary downloads by a crate (for example a runtime's
   download-binaries feature) are excluded; native libraries come from a
   pinned base image or a pinned, checksummed build input.
