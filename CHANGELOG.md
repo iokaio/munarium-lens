@@ -14,6 +14,9 @@
 - Add the deterministic reference backend (`LENS_*_BACKEND=reference`) for tests
   and protocol qualification. It is not a retrieval model and reports
   `"retrieval_model": false`. The model runtime is pending a maintainer decision.
+- Add a Dockerfile for the reference-only image: a static musl build on
+  digest-pinned `rust:1.98.1-alpine` and `distroless/static-debian12:nonroot`
+  bases, with no model runtime or weights.
 
 - Add the LENS-0 loopback CPU scaffold with liveness, typed unavailable responses,
   and an offline HTTP lifecycle test.

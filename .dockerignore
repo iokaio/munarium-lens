@@ -1,0 +1,22 @@
+# The image build needs only the manifest, lockfile, source and notices.
+# Keep build output, history, local assets and evidence out of the context.
+.git
+target/
+docs/
+tests/
+scratch/
+models/
+model-cache/
+private-corpus/
+receipts-local/
+.env
+.env.*
+*.local.toml
+*.pem
+*.key
+*.pfx
+*.p12
+*.safetensors
+*.onnx
+*.gguf
+*.pth
