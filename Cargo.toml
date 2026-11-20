@@ -1,0 +1,17 @@
+[package]
+name = "munarium-lens"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "Apache-2.0"
+description = "CPU-only scaffold for the Munarium inference endpoint"
+repository = "https://github.com/iokaio/munarium-lens"
+publish = false
+
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "signal"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", features = ["io-util", "sync", "time"] }

@@ -17,8 +17,27 @@ target
 rustc-ice-*.txt
 
 # RustRover
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore file
+#  and can be added to the global gitignore or merged into this file when needed.
 #.idea/
+
+# Python hygiene check bytecode
+__pycache__/
+
+# Local assets, credentials and request/corpus evidence stay outside public Git.
+.env
+.env.*
+*.local.toml
+*.pem
+*.key
+*.pfx
+*.p12
+*.safetensors
+*.onnx
+*.gguf
+*.pth
+/models/
+/model-cache/
+/private-corpus/
+/receipts-local/
+/scratch/

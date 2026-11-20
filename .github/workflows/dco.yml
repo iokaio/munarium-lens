@@ -1,0 +1,31 @@
+name: dco
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify DCO trailers on each PR commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          commits=$(git rev-list "${BASE}..${HEAD}")
+          for commit in $commits; do
+            trailers=$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly,unfold)' "$commit")
+            if ! grep -Eq '^.+ <[^<>[:space:]]+@[^<>[:space:]]+>$' <<< "$trailers"; then
+              echo "::error::Commit $commit is missing a valid Signed-off-by trailer"
+              missing=1
+            fi
+          done
+          exit "$missing"
