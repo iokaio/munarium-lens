@@ -140,8 +140,9 @@ relevant candidates, which would turn real differences into ties.
 With Server's prefix, Lens's prompt equals the card's byte for byte; a unit
 test checks this. Lens never adds instruction text. If Server sends a bare
 query, the prompt lacks the `<Instruct>` and `<Query>` lines, a form the card
-does not document. Server's binding has no rerank instruction setting yet;
-see the open questions below.
+does not document. Server sends that prefix when a binding sets the rerank
+`instruction` (Server `feat/clearview` [`100aa93`](https://github.com/iokaio/munarium/commit/100aa93)),
+under accepted hub ADR 0029.
 
 ## Observed on a development machine
 
@@ -198,16 +199,22 @@ No variant image is published.
 
 ## Open questions
 
-- **Rerank instruction in Server.** Server's binding has an embedding
-  `query_instruction` but no rerank instruction, and it sends the rerank
-  query unchanged. To match the card, Server would prefix
-  `<Instruct>: {instruction}\n<Query>: `. The alternative is an explicit
-  instruction field on the wire, with the labels in the Lens template. Either
-  needs a hub decision before Server's consumer changes.
-- **Query prefix spacing.** The embedding card's prompt is
-  `Instruct: {task}\nQuery:{query}` with no space after `Query:`. Server's
-  documented example ends in `Query: `. Both are Server's choice and part of
-  its semantic space; LENS-3 can compare them.
+Resolved on 20 November 2026:
+
+- **Rerank instruction in Server:** resolved without a new hub decision, under
+  accepted ADR 0029 (the Server owns instruction prefixes, including any rerank
+  instruction). The Server binding's optional rerank `instruction` is sent as
+  `<Instruct>: {instruction}
+<Query>: {query}`, and its digest is part of the
+  rerank stage identity (Server [`100aa93`](https://github.com/iokaio/munarium/commit/100aa93)).
+- **Query prefix spacing:** the Server's inference guide now recommends the
+  card's exact `Instruct: {task}
+Query:` prefix with no trailing space, and
+  notes that `Query: ` with a space is a different semantic space. LENS-3 may
+  still compare the two.
+
+Still open:
+
 - **Throughput.** One sequence at a time is correct but slow (see the
   measurements above). Padded batching needs an attention mask that
   Candle's Qwen3 model does not take; a Lens-owned model variant or a GPU
