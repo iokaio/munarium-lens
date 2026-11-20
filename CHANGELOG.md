@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Document model and weight distribution in the README. Bundles are hosted at
+  `huggingface.co/iokaio/munarium-lens-models`, with a GitHub Releases backup
+  under `models/<served_model>` tags. Each bundle has a fixed layout and a
+  permanent served name, and is pinned by Hugging Face commit and manifest
+  SHA-256. Both locations go through the same manifest verification. The
+  document covers the planned opt-in fetcher (off by default, explicit, atomic
+  writes, no credentials, feature-gated so the serving build keeps no HTTP or
+  TLS stack), manual fetching until then, and the maintainer publishing
+  procedure. The hosting location was decided on 20 November 2026; download
+  support is not implemented yet.
 - Add `deny.toml` and an advisory `supply chain` workflow (maintainer-approved
   on 20 November 2026) that runs a pinned, checksum-verified cargo-deny 0.20.2
   against the default and all-features graphs on pushes to `main`, pull
