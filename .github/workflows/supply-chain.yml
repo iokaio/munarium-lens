@@ -1,0 +1,46 @@
+name: supply chain
+
+# Advisory cargo-deny check (maintainer-approved, 20 November 2026). It is not
+# a required status check: a finding here, such as a new RustSec advisory,
+# does not block merging until a maintainer makes the check required.
+# It audits licenses, advisories, bans and sources for the default
+# reference-only graph and for the all-features graph, which adds the
+# optional `qwen3` backend. The policy is in deny.toml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a new advisory against a locked crate is visible without a PR.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny (default and qwen3 graphs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned cargo-deny
+        env:
+          CARGO_DENY_VERSION: "0.20.2"
+          CARGO_DENY_SHA256: "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+        run: |
+          set -euo pipefail
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          archive="$RUNNER_TEMP/cargo-deny.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
+          echo "$CARGO_DENY_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" "${name}/cargo-deny"
+          echo "$RUNNER_TEMP/${name}" >> "$GITHUB_PATH"
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Default graph
+        run: cargo deny --locked check
+      - name: All-features graph (adds qwen3)
+        run: cargo deny --locked --all-features check

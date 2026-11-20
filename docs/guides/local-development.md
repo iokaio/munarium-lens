@@ -12,6 +12,12 @@ cargo test --locked --offline
 cargo build --locked --offline
 ```
 
+To check the feature graph as well, add `--features qwen3` to the clippy and
+test commands. With [cargo-deny](https://github.com/EmbarkStudios/cargo-deny)
+installed, `cargo deny check` and `cargo deny --all-features check` apply the
+license, advisory, ban and source policy in [`deny.toml`](../../deny.toml),
+as the advisory supply-chain workflow does.
+
 ## Default: both stages disabled
 
 `cargo run --locked --offline` starts on `127.0.0.1:8787` with no backend.

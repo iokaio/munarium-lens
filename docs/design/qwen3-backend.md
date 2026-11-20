@@ -17,9 +17,13 @@ The feature adds `candle-core`, `candle-nn` and `candle-transformers` 0.11.1,
 `tokenizers` 0.23.2 (pure-Rust `fancy-regex`, without the default Oniguruma
 and C++ suffix-array features), `sha2` 0.11.1 and `serde_json` 1.0.154 as a
 normal dependency. For the Linux musl target the feature graph has 174
-crates against 44 for the default build. Each crate offers a permissive
-license, mostly MIT or Apache-2.0. None of the crates compiles C or C++ code
-or downloads anything at build or run time. Candle runs on CPU in FP32; its
+crates against 44 for the default build. Each crate offers a license
+allowed by [`deny.toml`](../../deny.toml), mostly MIT or Apache-2.0, and the
+advisory supply-chain workflow runs `cargo deny check` on both graphs. The
+only advisory is RUSTSEC-2024-0436: `paste` is unmaintained and arrives as a
+compile-time proc-macro through Candle's `gemm`. `deny.toml` records the
+reasoning, pending maintainer acceptance. None of the crates compiles C or
+C++ code or downloads anything at build or run time. Candle runs on CPU in FP32; its
 CUDA and Metal features stay off.
 
 ## Configuration

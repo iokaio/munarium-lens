@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add `deny.toml` and an advisory `supply chain` workflow (maintainer-approved
+  on 20 November 2026) that runs a pinned, checksum-verified cargo-deny 0.20.2
+  against the default and all-features graphs on pushes to `main`, pull
+  requests and weekly. The policy allows the Server's permissive license
+  list, denies every RustSec advisory, yanked crates, wildcard requirements,
+  TLS stacks, HTTP clients and the C tokenizer backends, and allows only
+  crates.io. One exception, RUSTSEC-2024-0436 for the compile-time `paste`
+  macro in the `qwen3` graph, is recorded with its reasoning and awaits
+  maintainer acceptance.
 - Add the optional `qwen3` cargo feature, off by default: Qwen3-Embedding-0.6B
   and Qwen3-Reranker-0.6B on Candle 0.11.1, CPU, FP32. Embedding uses
   last-token pooling and L2 normalization at 1,024 dimensions; reranking uses
