@@ -28,6 +28,28 @@ not a retrieval model. Every backend plugs into the per-stage interfaces in
 identity, counts tokens with its pinned tokenizer and template, and returns
 vectors or scores that the server validates before replying.
 
+## Published bundles
+
+Published on 20 November 2026 to
+[`iokaio/munarium-lens-models`](https://huggingface.co/iokaio/munarium-lens-models)
+in one commit, with identical `models/<bundle>` releases of this repository
+as the backup. A deployment pins all three values in a row.
+
+| Bundle | Hugging Face commit | `lens-manifest.json` SHA-256 | GitHub release |
+|---|---|---|---|
+| `qwen3-embedding-0.6b-f32-1024d` | [`cb8d6d3f4da7b0f5eacdbde4a61b5000f9d57cb1`](https://huggingface.co/iokaio/munarium-lens-models/tree/cb8d6d3f4da7b0f5eacdbde4a61b5000f9d57cb1/qwen3-embedding-0.6b-f32-1024d) | `1606785dd4138863591094eeff51e165384c1933981400eebb2085cb58f34b95` | [`models/qwen3-embedding-0.6b-f32-1024d`](https://github.com/iokaio/munarium-lens/releases/tag/models/qwen3-embedding-0.6b-f32-1024d) |
+| `qwen3-reranker-0.6b-f32` | [`cb8d6d3f4da7b0f5eacdbde4a61b5000f9d57cb1`](https://huggingface.co/iokaio/munarium-lens-models/tree/cb8d6d3f4da7b0f5eacdbde4a61b5000f9d57cb1/qwen3-reranker-0.6b-f32) | `303d88c2d49ad84a11ca392d22163d64aa7890c0ec4289f296bb9fe44a956f36` | [`models/qwen3-reranker-0.6b-f32`](https://github.com/iokaio/munarium-lens/releases/tag/models/qwen3-reranker-0.6b-f32) |
+
+Each bundle holds the upstream `config.json`, `tokenizer.json` and
+`model.safetensors` at the pinned upstream revision, unchanged (sizes and
+digests checked against the upstream repository's records), plus the
+manifest, the Apache-2.0 license text (the upstream repositories declare the
+license only in their model card metadata) and a bundle card. Before
+publication the real-weight test passed on these bytes. After publication,
+`munarium-lens fetch` verified both bundles end to end from each location:
+from Hugging Face directly, and from the GitHub releases when Hugging Face
+redirects were refused.
+
 ## Fixed constraints
 
 These follow from the existing designs and narrow the choice.

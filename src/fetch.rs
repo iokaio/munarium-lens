@@ -48,23 +48,21 @@ pub const HUGGING_FACE_BASE: &str = "https://huggingface.co/iokaio/munarium-lens
 /// Release downloads of this repository, the backup location. Fixed.
 pub const GITHUB_RELEASES_BASE: &str = "https://github.com/iokaio/munarium-lens/releases/download/";
 
-/// Hosts a Hugging Face download may reach: the repository host, which
-/// serves small files through a same-host `/api/resolve-cache/` redirect,
-/// and the CDN hosts it redirects large (Xet or LFS) files to.
-pub const HUGGING_FACE_HOSTS: &[&str] = &[
-    "huggingface.co",
-    "cas-bridge.xethub.hf.co",
-    "cdn-lfs.hf.co",
-    "cdn-lfs-us-1.hf.co",
-    "cdn-lfs-eu-1.hf.co",
-];
+/// Exact hosts a Hugging Face download may reach: the repository host,
+/// which serves small files through a same-host `/api/resolve-cache/`
+/// redirect. Large (Xet) files are redirected to a regional CDN host under
+/// [`HUGGING_FACE_CDN_DOMAIN`].
+pub const HUGGING_FACE_HOSTS: &[&str] = &["huggingface.co"];
+/// The Hugging Face CDN domain. A Hugging Face download may reach any
+/// subdomain of it (not the domain itself), because the CDN host is chosen
+/// per region: `us.aws.cdn.hf.co` was observed when the first bundles were
+/// published (20 November 2026). Maintainer-approved the same day. The
+/// manifest digest, not the host, is what authenticates the bytes.
+pub const HUGGING_FACE_CDN_DOMAIN: &str = "cdn.hf.co";
 /// Hosts a GitHub release download may reach: `github.com` and the
-/// release-asset hosts it redirects to.
-pub const GITHUB_HOSTS: &[&str] = &[
-    "github.com",
-    "release-assets.githubusercontent.com",
-    "objects.githubusercontent.com",
-];
+/// release-asset host it redirected every asset to when the first bundles
+/// were published.
+pub const GITHUB_HOSTS: &[&str] = &["github.com", "release-assets.githubusercontent.com"];
 /// Most redirects followed for one file.
 pub const MAX_REDIRECTS: usize = 5;
 
@@ -103,7 +101,15 @@ impl Source {
         }
     }
 
-    /// The hosts this source may reach, including through redirects.
+    /// Whether this source may reach `host`, including through redirects:
+    /// one of [`Source::hosts`], or for Hugging Face a subdomain of
+    /// [`HUGGING_FACE_CDN_DOMAIN`] made of lowercase DNS labels.
+    pub fn allows_host(self, host: &str) -> bool {
+        self.hosts().contains(&host)
+            || (self == Self::HuggingFace && subdomain_of(host, HUGGING_FACE_CDN_DOMAIN))
+    }
+
+    /// The exact hosts this source may reach, including through redirects.
     pub fn hosts(self) -> &'static [&'static str] {
         match self {
             Self::HuggingFace => HUGGING_FACE_HOSTS,
@@ -119,6 +125,28 @@ impl Source {
         }
         self.base().to_owned()
     }
+}
+
+/// Whether `host` is a proper subdomain of `domain`: one or more labels
+/// before `.<domain>`, each 1 to 63 lowercase letters, digits or inner
+/// hyphens. The domain itself, a trailing dot, empty labels, uppercase and
+/// any other character are refused.
+fn subdomain_of(host: &str, domain: &str) -> bool {
+    let Some(prefix) = host
+        .strip_suffix(domain)
+        .and_then(|rest| rest.strip_suffix('.'))
+    else {
+        return false;
+    };
+    !prefix.is_empty()
+        && prefix.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 /// Percent-encode one path segment, leaving only RFC 3986 unreserved bytes.
@@ -173,7 +201,7 @@ pub fn file_url(source: Source, revision: &str, bundle: &str, path: &str) -> Opt
 }
 
 /// Check that `url` may be requested for `source`: HTTPS on the default
-/// port, no user information, and a host in the source's fixed list.
+/// port, no user information, and a host the source allows.
 fn allowed(source: Source, url: &str) -> Option<Uri> {
     let uri: Uri = url.parse().ok()?;
     let authority = uri.authority()?;
@@ -185,7 +213,7 @@ fn allowed(source: Source, url: &str) -> Option<Uri> {
     if tests::test_endpoint(&uri) {
         return Some(uri);
     }
-    let fixed_host = source.hosts().contains(&host);
+    let fixed_host = source.allows_host(host);
     let https = uri.scheme_str() == Some("https");
     let default_port = matches!(uri.port_u16(), None | Some(443));
     (fixed_host && https && default_port).then_some(uri)
@@ -1467,6 +1495,58 @@ pub(crate) mod tests {
         ] {
             assert!(!ok(Source::HuggingFace, url), "{url}");
         }
+        // Any regional host under the Hugging Face CDN domain, and only for
+        // the Hugging Face source.
+        for host in ["us.aws.cdn.hf.co", "eu.aws.cdn.hf.co", "a-1.b2.cdn.hf.co"] {
+            let url = format!("https://{host}/x?sig=1");
+            assert!(ok(Source::HuggingFace, &url), "{host}");
+            assert!(!ok(Source::GitHubReleases, &url), "{host}");
+            assert!(
+                !ok(Source::HuggingFace, &format!("http://{host}/x")),
+                "{host}"
+            );
+            assert!(
+                !ok(Source::HuggingFace, &format!("https://{host}:8443/x")),
+                "{host}"
+            );
+            assert!(
+                !ok(Source::HuggingFace, &format!("https://u@{host}/x")),
+                "{host}"
+            );
+        }
+        // The domain itself, look-alikes, malformed labels, and hosts
+        // removed after the first publication fail closed.
+        for url in [
+            "https://cdn.hf.co/x",
+            "https://.cdn.hf.co/x",
+            "https://us..cdn.hf.co/x",
+            "https://-us.cdn.hf.co/x",
+            "https://us-.cdn.hf.co/x",
+            "https://US.AWS.CDN.HF.CO/x",
+            "https://us.aws.cdn.hf.co./x",
+            "https://evilcdn.hf.co/x",
+            "https://xcdn.hf.co/x",
+            "https://us.aws.cdn.hf.co.example.net/x",
+            "https://cdn.hf.co.example.net/x",
+            "https://cas-bridge.xethub.hf.co/x",
+            "https://cdn-lfs.hf.co/x",
+            "https://cdn-lfs-us-1.hf.co/x",
+            "https://cdn-lfs-eu-1.hf.co/x",
+        ] {
+            assert!(!ok(Source::HuggingFace, url), "{url}");
+        }
+        assert!(!subdomain_of(
+            &format!("{}.cdn.hf.co", "a".repeat(64)),
+            HUGGING_FACE_CDN_DOMAIN
+        ));
+        assert!(subdomain_of(
+            &format!("{}.cdn.hf.co", "a".repeat(63)),
+            HUGGING_FACE_CDN_DOMAIN
+        ));
+        assert!(!ok(
+            Source::GitHubReleases,
+            "https://objects.githubusercontent.com/x"
+        ));
         assert!(!ok(Source::GitHubReleases, "https://api.github.com/x"));
         assert!(!ok(
             Source::GitHubReleases,
@@ -1490,8 +1570,8 @@ pub(crate) mod tests {
             "https://huggingface.co/api/resolve-cache/models/x?etag=1"
         );
         assert_eq!(
-            resolve_location(&current, "https://cas-bridge.xethub.hf.co/y").unwrap(),
-            "https://cas-bridge.xethub.hf.co/y"
+            resolve_location(&current, "https://us.aws.cdn.hf.co/y").unwrap(),
+            "https://us.aws.cdn.hf.co/y"
         );
         assert_eq!(resolve_location(&current, "//evil.example/x"), None);
         assert_eq!(resolve_location(&current, "relative/x"), None);
@@ -2104,7 +2184,7 @@ name = \"other\"
     #[test]
     fn routes_only_https_targets_through_the_proxy() {
         let proxy = TestProxy::start(ProxyMode::Tunnel);
-        let settings = proxy.settings("", "cdn-lfs.hf.co");
+        let settings = proxy.settings("", "us.aws.cdn.hf.co");
         let fetcher = Fetcher::new(Duration::from_secs(5), Some(&settings)).unwrap();
         let route = |url: &str| {
             fetcher
@@ -2112,7 +2192,7 @@ name = \"other\"
                 .map(|proxy| proxy.is_some())
         };
         assert_eq!(route("https://huggingface.co/x"), Ok(true));
-        assert_eq!(route("https://cdn-lfs.hf.co/x"), Ok(false));
+        assert_eq!(route("https://us.aws.cdn.hf.co/x"), Ok(false));
         assert_eq!(
             route("http://huggingface.co/x"),
             Err(FetchError::ProxyTargetNotHttps)

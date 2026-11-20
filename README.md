@@ -37,8 +37,9 @@ download a pinned bundle with `munarium-lens fetch` or at startup (see
 bundle settings, downloads nothing: the operator fetches a bundle by hand (see
 [Fetching a bundle by hand](#fetching-a-bundle-by-hand)) and points
 `LENS_EMBEDDING_ARTIFACTS` or `LENS_RERANKING_ARTIFACTS` at it.
-There is nothing to pin until the maintainer publishes a bundle and records
-its commit and manifest digest (see [Publishing a bundle](#publishing-a-bundle)).
+The published bundles, with the Hugging Face commit and manifest digest to
+pin, are listed in the
+[model runtime decision](docs/design/model-runtime.md#published-bundles).
 
 ### What is published
 
@@ -135,13 +136,14 @@ stack at all.
   lists, and nothing else. If Hugging Face serves a different manifest, the
   GitHub copy is tried; if neither matches, no file is downloaded.
 - **Redirects.** Followed manually, at most 5 per file, and only over HTTPS on
-  port 443 to the hosts of the location being used: `huggingface.co` (which
-  redirects small files to its own `/api/resolve-cache/` path),
-  `cas-bridge.xethub.hf.co`, `cdn-lfs.hf.co`, `cdn-lfs-us-1.hf.co` and
-  `cdn-lfs-eu-1.hf.co` for Hugging Face; `github.com`,
-  `release-assets.githubusercontent.com` and `objects.githubusercontent.com`
-  for GitHub. Any other target, user information in a URL or a downgrade to
-  HTTP is refused before connecting.
+  port 443 to the hosts of the location being used. Hugging Face:
+  `huggingface.co` (which redirects small files to its own
+  `/api/resolve-cache/` path) and any subdomain of `cdn.hf.co`, its regional
+  CDN for large files (`us.aws.cdn.hf.co` when the first bundles were
+  published; the region varies by location, so the domain is allowed rather
+  than one host). GitHub: `github.com` and
+  `release-assets.githubusercontent.com`. Any other target, user information
+  in a URL or a downgrade to HTTP is refused before connecting.
 - **Safe writes.** Each file streams into a `.lens-partial-*` temporary file in
   its target directory, is cut off at the manifest's size, and must match the
   size and SHA-256 exactly. It is then flushed to disk and renamed into place
@@ -277,11 +279,12 @@ agent without explicit authorization.
    Hugging Face commit and manifest digest in the release notes.
 6. Record the bundle, commit and digest in the
    [model runtime decision](docs/design/model-runtime.md) and the CHANGELOG.
-7. After publishing, confirm the observed redirect hosts and trim the
-   allowlist: fetch the new bundle from each location, note the hosts each
-   download actually redirects to, and remove any host in `src/fetch.rs`
-   (and its test) that neither location used (maintainer-approved,
-   20 November 2026).
+7. After publishing, fetch the new bundle from each location with
+   `munarium-lens fetch` and check the hosts each download redirects to. The
+   allowlist in `src/fetch.rs` was trimmed to the observed hosts when the
+   first bundles were published (maintainer-approved, 20 November 2026). A
+   new redirect host outside it fails closed and needs a reviewed change to
+   that list and its tests.
 
 The weights keep their upstream license. Munarium Lens's own Apache-2.0 license
 covers this repository's code, not the model weights.

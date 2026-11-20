@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Publish the first model bundles (20 November 2026):
+  `qwen3-embedding-0.6b-f32-1024d` (manifest SHA-256
+  `1606785dd4138863591094eeff51e165384c1933981400eebb2085cb58f34b95`) and
+  `qwen3-reranker-0.6b-f32` (manifest SHA-256
+  `303d88c2d49ad84a11ca392d22163d64aa7890c0ec4289f296bb9fe44a956f36`), both
+  at Hugging Face commit `cb8d6d3f4da7b0f5eacdbde4a61b5000f9d57cb1` of
+  `iokaio/munarium-lens-models`, with identical `models/<bundle>` releases of
+  this repository. The pins are recorded in the model runtime decision.
+- Set the fetcher's redirect allowlist to the hosts observed when those
+  bundles were downloaded. Hugging Face redirected large files to
+  `us.aws.cdn.hf.co`, which the previous list did not contain, so every large
+  file fell back to GitHub. Hugging Face now allows `huggingface.co` and any
+  subdomain of `cdn.hf.co` (its regional CDN; maintainer-approved), and no
+  longer `cas-bridge.xethub.hf.co` or `cdn-lfs*.hf.co`. GitHub allows
+  `github.com` and `release-assets.githubusercontent.com`, no longer
+  `objects.githubusercontent.com`. Adds `HUGGING_FACE_CDN_DOMAIN` and
+  `Source::allows_host`.
 - Record maintainer approvals of 20 November 2026: the RUSTSEC-2024-0436
   (`paste`) advisory exception, with where it is used, why it was accepted
   and its re-evaluation conditions in `deny.toml`; the `fetch` dependency

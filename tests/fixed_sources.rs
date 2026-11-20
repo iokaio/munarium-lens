@@ -154,8 +154,8 @@ mod fetch {
     use std::path::Path;
 
     use munarium_lens::fetch::{
-        GITHUB_HOSTS, GITHUB_RELEASES_BASE, HUGGING_FACE_BASE, HUGGING_FACE_HOSTS, SOURCE_ORDER,
-        Source, file_url, parse_command,
+        GITHUB_HOSTS, GITHUB_RELEASES_BASE, HUGGING_FACE_BASE, HUGGING_FACE_CDN_DOMAIN,
+        HUGGING_FACE_HOSTS, SOURCE_ORDER, Source, file_url, parse_command,
     };
 
     const REVISION: &str = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3";
@@ -183,24 +183,20 @@ mod fetch {
 
     #[test]
     fn redirects_stay_on_the_documented_hosts() {
-        assert_eq!(
-            HUGGING_FACE_HOSTS,
-            [
-                "huggingface.co",
-                "cas-bridge.xethub.hf.co",
-                "cdn-lfs.hf.co",
-                "cdn-lfs-us-1.hf.co",
-                "cdn-lfs-eu-1.hf.co",
-            ]
-        );
+        // The hosts observed when the first bundles were published, with
+        // the Hugging Face CDN as a domain because its host is regional.
+        assert_eq!(HUGGING_FACE_HOSTS, ["huggingface.co"]);
+        assert_eq!(HUGGING_FACE_CDN_DOMAIN, "cdn.hf.co");
         assert_eq!(
             GITHUB_HOSTS,
-            [
-                "github.com",
-                "release-assets.githubusercontent.com",
-                "objects.githubusercontent.com",
-            ]
+            ["github.com", "release-assets.githubusercontent.com"]
         );
+        assert!(Source::HuggingFace.allows_host("us.aws.cdn.hf.co"));
+        assert!(Source::HuggingFace.allows_host("eu.aws.cdn.hf.co"));
+        assert!(!Source::HuggingFace.allows_host("cdn.hf.co"));
+        assert!(!Source::HuggingFace.allows_host("cas-bridge.xethub.hf.co"));
+        assert!(!Source::GitHubReleases.allows_host("us.aws.cdn.hf.co"));
+        assert!(!Source::GitHubReleases.allows_host("objects.githubusercontent.com"));
     }
 
     #[test]

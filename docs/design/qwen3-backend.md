@@ -239,9 +239,20 @@ received 404 from each (`not_found`), leaving only an empty bundle
 directory. Without a writable mount the same command fails with
 `write_failed` before any connection. A manual `HEAD` of a small file under
 `huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/<pinned commit>/` returned
-`307` to a same-host `/api/resolve-cache/` path; the CDN hosts used for large
-files were not observed directly and come from Hugging Face's documented
-storage hosts.
+`307` to a same-host `/api/resolve-cache/` path.
+
+After the first bundles were published (20 November 2026), every small file
+from `huggingface.co/iokaio/munarium-lens-models` redirected to the same
+host's `/api/resolve-cache/` path, and every large (Xet) file,
+`tokenizer.json` and `model.safetensors`, to `us.aws.cdn.hf.co`, a host the
+original list (`cas-bridge.xethub.hf.co`, `cdn-lfs*.hf.co`) did not contain:
+the fetcher refused those redirects and completed both bundles from the
+GitHub releases, each of whose assets redirected only to
+`release-assets.githubusercontent.com`. The allowlist is now `huggingface.co`
+plus any subdomain of `cdn.hf.co` (the CDN host is regional), and
+`github.com` plus `release-assets.githubusercontent.com`. With it, `fetch`
+downloaded and verified both bundles from Hugging Face alone, and a second
+run reused the cache without connecting.
 
 ## Open questions
 
@@ -251,11 +262,9 @@ Resolved on 20 November 2026:
   `rustls` and `ring` by parent and the scoped `webpki-roots`
   CDLA-Permissive-2.0 license exception; restart-only retry with a long
   startup probe; and trimming the redirect allowlist after the first bundle
-  is published. The last is a step of the README's publishing procedure:
-  confirm the Hugging Face CDN host (`cas-bridge.xethub.hf.co` for Xet
-  storage, `cdn-lfs*.hf.co` for LFS) and the GitHub release-asset host the
-  bundle actually redirects to, and trim the allowlist to them. Until then a
-  host outside the list fails closed.
+  is published. Done on 20 November 2026 from the observed redirects (see
+  above), with the maintainer's approval to allow the regional Hugging Face
+  CDN as the domain `cdn.hf.co` rather than the single observed host.
 - **RUSTSEC-2024-0436 (`paste`):** the advisory exception is approved.
 
 - **Rerank instruction in Server:** resolved without a new hub decision, under
