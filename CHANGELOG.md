@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Record the maintainer decisions of 20 November 2026: Qwen3-Embedding-0.6B
+  and Qwen3-Reranker-0.6B at 1,024 dimensions are accepted, and Server owns
+  instruction prefixes while Lens applies none. The maintainer also confirmed
+  Candle as the runtime, which can be altered later if needed. Update the
+  model runtime page, decision register, endpoint profile and milestone status
+  (LENS-1: reference backend ready; model backend in progress).
 - Update the pinned Tokio release from 1.53.1 to 1.53.3, which resolves
   [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386).
   No other locked package changes.

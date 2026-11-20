@@ -90,8 +90,11 @@ refused. Rerank takes `model`, a non-empty `query` and a non-empty `documents`
 array of strings; `top_n` and `return_documents` are refused because the
 whole candidate set is always scored. Empty strings are allowed as items.
 Lens applies no instruction prefix or truncation: each string is the
-effective input. Whether a model profile's query instruction is applied by
-Server or by Lens remains open.
+effective input. Server owns query, passage and rerank instructions and
+applies them as text before sending (maintainer decision of 20 November 2026,
+recorded in the [decision register](decisions.md)). A backend may still wrap
+the effective input in its model's fixed template, which is part of the served
+identity and counted in `usage`.
 
 **Success.** Embedding: `{"object":"list","model":<served>,"data":[{"object":"embedding","index":i,"embedding":[...]}...],"usage":{"prompt_tokens":n,"total_tokens":n}}`
 with rows in input order and every vector at the declared dimension.
