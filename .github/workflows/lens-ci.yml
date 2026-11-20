@@ -21,3 +21,23 @@ jobs:
       - run: cargo clippy --locked --offline --all-targets -- -D warnings
       - run: cargo test --locked --offline
       - run: cargo build --locked --offline
+
+  # The optional features, alone and together: the qwen3 model backend
+  # (Candle), the verified bundle fetcher, and the model image's build. No
+  # test downloads weights or reaches a real host: the fetcher's tests
+  # resolve only 127.0.0.1, and the real-weight test is #[ignore]d.
+  lens-features:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["fetch", "qwen3", "qwen3,fetch"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - run: cargo clippy --locked --offline --all-targets --features "${{ matrix.features }}" -- -D warnings
+      - run: cargo test --locked --offline --features "${{ matrix.features }}"
+      - run: cargo build --locked --offline --release --features "${{ matrix.features }}"
