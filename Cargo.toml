@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
-tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "signal"] }
+tokio = { version = "=1.53.3", features = ["macros", "net", "rt", "signal"] }
 
 [dev-dependencies]
-tokio = { version = "=1.53.1", features = ["io-util", "sync", "time"] }
+tokio = { version = "=1.53.3", features = ["io-util", "sync", "time"] }
