@@ -41,9 +41,8 @@ The [Dockerfile](Dockerfile) builds on the digest-pinned `rust:1.98.1-alpine`
 image and copies the static binary into the digest-pinned
 `gcr.io/distroless/static-debian12:nonroot` image. That runtime base carries
 its own Debian package notices. The default reference image adds no model
-runtime or HTTP client; `--build-arg LENS_FEATURES=qwen3,fetch` adds the
-Candle and fetcher graphs above, and `--build-arg LENS_FEATURES=qwen3` the
-Candle graph only.
+runtime or HTTP client; `--build-arg LENS_FEATURES=qwen3,fetch`, the only
+other image, adds the Candle and fetcher graphs above.
 
 Before distributing a binary or image, generate and review notices from its
 exact shipping dependency graph and runtime image, retain applicable license

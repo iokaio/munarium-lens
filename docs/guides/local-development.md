@@ -197,8 +197,10 @@ HTTP `CONNECT` egress proxy set with `HTTPS_PROXY` and `NO_PROXY` (see the
 README for the accepted forms). A first start downloads about 1.2 GB per stage before readiness, so
 use a startup probe with enough time. The image trusts the Mozilla root
 certificates compiled into the binary (`webpki-roots`), not the base
-image's certificate store. `--build-arg LENS_FEATURES=qwen3` builds the same
-backend without an HTTP client, for bundles mounted read-only instead.
+image's certificate store. The same image also serves bundles mounted
+read-only through `LENS_*_ARTIFACTS`; without bundle settings it makes no
+connection. These are the only two images: the build refuses
+`LENS_FEATURES=qwen3` alone and any other value.
 
 Run the contributor checks in [Contributing](../../CONTRIBUTING.md) before
 opening a pull request. See the [serving guide](../ops/serving.md) for

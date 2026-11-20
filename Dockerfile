@@ -11,9 +11,13 @@
 #                  startup it downloads the pinned bundles into a writable
 #                  cache volume at /var/cache/lens, only from the fixed
 #                  Hugging Face repository iokaio/munarium-lens-models, or
-#                  from the fixed GitHub release backup if that fails.
-#   "qwen3"        Offline model image without an HTTP client: mount the
-#                  bundles read-only.
+#                  from the fixed GitHub release backup if that fails,
+#                  directly or through an HTTPS_PROXY CONNECT tunnel. With
+#                  read-only bundles mounted and no bundle settings it makes
+#                  no connection.
+#
+# There is no image of the qwen3 feature without the fetcher. The qwen3
+# cargo feature itself remains for builds and tests.
 #
 # Both stages are disabled and the listener is loopback-only unless the
 # operator configures them at run time. Without bundle settings no variant
@@ -27,14 +31,14 @@ FROM rust:1.98.1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed
 # which would also download the contributor lint components.
 ENV RUSTUP_TOOLCHAIN=1.98.1
 RUN apk add --no-cache musl-dev
-# Empty, `qwen3,fetch` or `qwen3`. Nothing else is accepted.
+# Empty or `qwen3,fetch`. Nothing else is accepted.
 ARG LENS_FEATURES=""
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN case "$LENS_FEATURES" in \
-      "" | qwen3 | qwen3,fetch) ;; \
-      *) echo "LENS_FEATURES must be empty, qwen3,fetch or qwen3" >&2; exit 1 ;; \
+      "" | qwen3,fetch) ;; \
+      *) echo "LENS_FEATURES must be empty or qwen3,fetch" >&2; exit 1 ;; \
     esac \
  && cargo build --locked --release ${LENS_FEATURES:+--features "$LENS_FEATURES"} \
  && mkdir -p /out/cache \
@@ -47,7 +51,7 @@ LABEL org.opencontainers.image.source="https://github.com/iokaio/munarium-lens" 
       org.opencontainers.image.revision=$SOURCE_REVISION \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.title="Munarium Lens (${LENS_FEATURES:-reference backend})" \
-      org.opencontainers.image.description="Munarium Lens, cargo features: ${LENS_FEATURES:-none}. The default build serves only the deterministic reference backend, which is not a retrieval model. No image contains model weights. The fetch feature downloads pinned bundles only from the fixed Munarium Hugging Face repository or its GitHub release backup."
+      org.opencontainers.image.description="Munarium Lens, cargo features: ${LENS_FEATURES:-none}. Two images exist: the default reference image, which serves only the deterministic reference backend (not a retrieval model) and has no HTTP client, and the qwen3,fetch model image. No image contains model weights. The model image downloads pinned bundles only from the fixed Munarium Hugging Face repository or its GitHub release backup, optionally through an HTTPS_PROXY CONNECT tunnel."
 COPY --from=builder /out/munarium-lens /munarium-lens
 # An empty cache directory owned by the runtime user, so a named volume
 # mounted here starts writable. With a read-only root filesystem, mount a

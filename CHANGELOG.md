@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Drop the `qwen3` image variant without the fetcher (maintainer decision of
+  20 November 2026). The Dockerfile now accepts only an empty
+  `LENS_FEATURES` (the reference image) or `qwen3,fetch` (the model image,
+  which also serves read-only mounted bundles); `qwen3` alone and any other
+  value fail the build. The image description label names the two images.
+  The `qwen3` cargo feature remains for builds and tests.
 - The fetcher honors the standard egress proxy settings (maintainer decision
   of 20 November 2026): `HTTPS_PROXY`/`https_proxy` names an `http://` proxy,
   optionally with credentials, and `NO_PROXY`/`no_proxy` lists hosts to reach

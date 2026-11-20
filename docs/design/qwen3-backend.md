@@ -199,19 +199,22 @@ LENS_QWEN3_TEST_DIR=models cargo test --release --features qwen3 -- --ignored --
 
 ## Container image
 
-The [Dockerfile](../../Dockerfile) builds two model variants; the default
-build argument is empty and produces the reference image. Both use the same
-static musl builder and distroless runtime, and no variant contains weights.
+The [Dockerfile](../../Dockerfile) builds exactly two images: the default
+(empty build argument) reference image and the model image,
+`--build-arg LENS_FEATURES=qwen3,fetch`. Both use the same static musl
+builder and distroless runtime, and neither contains weights. Any other
+`LENS_FEATURES` value, including `qwen3` alone, is refused by the build; the
+`qwen3` cargo feature itself remains for builds and tests.
 
-- `--build-arg LENS_FEATURES=qwen3,fetch` is the model image. It downloads
-  the pinned bundles at startup into a writable volume at `/var/cache/lens`,
-  so the image stays small, and runs with a read-only root filesystem. See
-  the [model container walkthrough](../guides/local-development.md#model-container).
-- `--build-arg LENS_FEATURES=qwen3` has no HTTP client, for hosts that mount
-  the bundles read-only:
+The model image downloads the pinned bundles at startup into a writable
+volume at `/var/cache/lens`, so the image stays small, and runs with a
+read-only root filesystem. See the
+[model container walkthrough](../guides/local-development.md#model-container).
+It also serves bundles mounted read-only; without bundle settings it makes
+no connection:
 
 ```sh
-docker build --build-arg LENS_FEATURES=qwen3 -t munarium-lens-qwen3:local .
+docker build --build-arg LENS_FEATURES=qwen3,fetch -t munarium-lens-qwen3:local .
 docker run --rm -p 127.0.0.1:8787:8787 -v /srv/lens:/models:ro \
   -e LENS_HOST=0.0.0.0 -e LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK=1 \
   -e LENS_EMBEDDING_BACKEND=qwen3 -e LENS_EMBEDDING_ARTIFACTS=/models/qwen3-embedding-0.6b -e LENS_EMBEDDING_MANIFEST_SHA256=<digest> \
