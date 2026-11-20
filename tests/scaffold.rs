@@ -1,34 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::SocketAddr;
+//! The default configuration: loopback only, both stages disabled.
+
+mod common;
+
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use common::request;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::time::timeout;
-
-async fn request(addr: SocketAddr, method: &str, path: &str, json: Option<&str>) -> (u16, String) {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
-    if let Some(body) = json {
-        head.push_str(&format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\n",
-            body.len()
-        ));
-    }
-    head.push_str("\r\n");
-    stream.write_all(head.as_bytes()).await.unwrap();
-    if let Some(body) = json {
-        stream.write_all(body.as_bytes()).await.unwrap();
-    }
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await.unwrap();
-    let response = String::from_utf8(response).unwrap();
-    let (head, body) = response.split_once("\r\n\r\n").unwrap();
-    let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
-    (status, body.to_owned())
-}
 
 #[tokio::test]
 async fn serves_synthetic_requests_and_shuts_down() {
@@ -40,13 +21,18 @@ async fn serves_synthetic_requests_and_shuts_down() {
             shutdown.await.unwrap();
         }));
 
+        let reply = request(addr, "GET", "/healthz", None).await;
+        assert_eq!((reply.status, reply.body.as_str()), (204, ""));
+        let reply = request(addr, "GET", "/readyz", None).await;
         assert_eq!(
-            request(addr, "GET", "/healthz", None).await,
-            (204, String::new())
+            (reply.status, reply.body.as_str()),
+            (503, r#"{"code":"backend_not_ready"}"#)
         );
+        assert!(reply.head.contains("content-type: application/json"));
+        let reply = request(addr, "GET", "/v1/models", None).await;
         assert_eq!(
-            request(addr, "GET", "/readyz", None).await,
-            (503, r#"{"code":"backend_not_ready"}"#.to_owned())
+            (reply.status, reply.body.as_str()),
+            (200, r#"{"object":"list","data":[]}"#)
         );
         for (path, data, stage) in [
             (
@@ -60,13 +46,14 @@ async fn serves_synthetic_requests_and_shuts_down() {
                 "reranking",
             ),
         ] {
-            let (status, body) = request(addr, "POST", path, Some(data)).await;
-            assert_eq!(status, 503);
+            let reply = request(addr, "POST", path, Some(data)).await;
+            assert_eq!(reply.status, 503);
             assert_eq!(
-                body,
+                reply.body,
                 format!(r#"{{"code":"inference_unavailable","stage":"{stage}"}}"#)
             );
         }
+        let limit = munarium_lens::Limits::default().max_body_bytes;
         for (bad_request, expected_status, expected_code) in [
             (None, 415, "unsupported_media_type"),
             (
@@ -80,18 +67,15 @@ async fn serves_synthetic_requests_and_shuts_down() {
                 "invalid_request",
             ),
             (Some(" "), 400, "invalid_request"),
-            (
-                Some(" ".repeat(16 * 1024 + 1).as_str()),
-                413,
-                "body_too_large",
-            ),
+            (Some(" ".repeat(limit + 1).as_str()), 413, "body_too_large"),
         ] {
-            let (status, body) = request(addr, "POST", "/v1/embeddings", bad_request).await;
-            assert_eq!(status, expected_status);
+            let reply = request(addr, "POST", "/v1/embeddings", bad_request).await;
+            assert_eq!(reply.status, expected_status);
             assert_eq!(
-                body,
+                reply.body,
                 format!(r#"{{"code":"{expected_code}","stage":"embedding"}}"#)
             );
+            assert!(!reply.body.contains("private"));
         }
         stop.send(()).unwrap();
         server.await.unwrap().unwrap();

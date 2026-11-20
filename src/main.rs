@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::Ipv4Addr;
-
 use tokio::net::TcpListener;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let port = match std::env::var("LENS_PORT") {
-        Ok(value) => value.parse::<u16>()?,
-        Err(std::env::VarError::NotPresent) => 8787,
-        Err(error) => return Err(error.into()),
-    };
+    let config = munarium_lens::Config::from_env()?;
     #[cfg(unix)]
     let (mut interrupt, mut terminate) = {
         use tokio::signal::unix::{SignalKind, signal};
@@ -19,10 +13,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             signal(SignalKind::terminate())?,
         )
     };
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-    eprintln!("Lens scaffold listening on {}", listener.local_addr()?);
+    let listener = TcpListener::bind(config.listen).await?;
 
-    munarium_lens::serve(listener, async move {
+    munarium_lens::serve_with(listener, &config, async move {
         #[cfg(unix)]
         tokio::select! {
             _ = interrupt.recv() => {},
