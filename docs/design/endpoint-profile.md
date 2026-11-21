@@ -110,7 +110,7 @@ failure wins:
 
 | Order | Status and `code` | Condition |
 |---|---|---|
-| 1 | *(reserved)* | Service authentication, once IR-1 chooses a scheme. Not implemented. |
+| 1 | 401 `service_auth_required` | When configured, the pool service bearer is missing or invalid. Lens returns `WWW-Authenticate: Bearer` with a content-free body before reading the request. The [serving guide](../ops/serving.md#service-authentication) describes the proposed profile. |
 | 2 | 415 `unsupported_media_type` | Missing or non-JSON content type. |
 | 3 | 413 `body_too_large` | Body above `max_body_bytes`. |
 | 4 | 400 `invalid_request` | Malformed JSON, unknown or missing field, wrong type, empty `model`, `input`, `query` or `documents`. |

@@ -10,8 +10,9 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{StatusCode, header};
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,7 @@ mod manifest;
 #[cfg(feature = "qwen3")]
 mod qwen3;
 mod reference;
+mod service_auth;
 
 use admission::Admission;
 use backend::{BackendError, EmbeddingBackend, RerankHit, RerankingBackend, ServedIdentity};
@@ -599,15 +601,41 @@ async fn rerank(
     .into_response()
 }
 
-fn router(state: Arc<AppState>) -> Router {
+async fn require_service_bearer(
+    State(bearer): State<service_auth::Bearer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if bearer.admits(request.headers()) {
+        return next.run(request).await;
+    }
+    let mut response = problem(StatusCode::UNAUTHORIZED, "service_auth_required", None);
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn router(state: Arc<AppState>, bearer: Option<service_auth::Bearer>) -> Router {
     let body_limit = state.limits.max_body_bytes;
-    Router::new()
-        .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
+    let service = Router::new()
         .route("/readyz", get(ready))
         .route("/v1/models", get(models))
         .route("/v1/embeddings", post(embed))
         .route("/v1/rerank", post(rerank))
-        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(DefaultBodyLimit::max(body_limit));
+    let service = match bearer {
+        Some(bearer) => service.route_layer(middleware::from_fn_with_state(
+            bearer,
+            require_service_bearer,
+        )),
+        None => service,
+    };
+    service
+        .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .with_state(state)
 }
 
@@ -621,18 +649,24 @@ pub async fn serve(
 
 /// Load and probe the configured stages, then serve until `shutdown`
 /// completes. Accepted requests finish before this returns. The listener must
-/// be on loopback unless the configuration explicitly allows otherwise; its
-/// address takes precedence over `config.listen`.
+/// be on loopback unless a service bearer or the development override is
+/// configured. Its address takes precedence over `config.listen`.
 pub async fn serve_with(
     listener: TcpListener,
     config: &Config,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
     let address = listener.local_addr()?;
-    if !address.ip().is_loopback() && !config.allow_unauthenticated_non_loopback {
+    let bearer = config
+        .service_bearer_file
+        .as_deref()
+        .map(service_auth::Bearer::read)
+        .transpose()?;
+    if !address.ip().is_loopback() && bearer.is_none() && !config.allow_unauthenticated_non_loopback
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "a non-loopback listener requires LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK=1",
+            "a non-loopback listener requires LENS_SERVICE_BEARER_FILE or LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK=1",
         ));
     }
     eprintln!("Lens listening on {address}");
@@ -655,7 +689,7 @@ pub async fn serve_with(
             );
         }
     }
-    axum::serve(listener, router(state))
+    axum::serve(listener, router(state, bearer))
         .with_graceful_shutdown(shutdown)
         .await
 }

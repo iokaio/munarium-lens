@@ -344,10 +344,10 @@ impl Default for Limits {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub listen: SocketAddr,
-    /// Permit a non-loopback listener. Lens has no service authentication
-    /// yet, so this is only for an isolated container network whose published
-    /// port is bound to the host loopback interface.
+    /// Permit an unauthenticated listener on an isolated development network.
     pub allow_unauthenticated_non_loopback: bool,
+    /// Read the pool's service bearer from this mounted file at startup.
+    pub service_bearer_file: Option<PathBuf>,
     pub embedding: StageBackend,
     pub reranking: StageBackend,
     /// Dimension of the reference embedding backend.
@@ -371,6 +371,7 @@ impl Default for Config {
         Self {
             listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8787),
             allow_unauthenticated_non_loopback: false,
+            service_bearer_file: None,
             embedding: StageBackend::Disabled,
             reranking: StageBackend::Disabled,
             reference_dimensions: 1024,
@@ -664,6 +665,7 @@ impl Config {
             // The range check above keeps the port within u16.
             listen: SocketAddr::new(host, port as u16),
             allow_unauthenticated_non_loopback: allow,
+            service_bearer_file: get("LENS_SERVICE_BEARER_FILE").map(PathBuf::from),
             embedding,
             reranking,
             embedding_artifacts: artifacts(

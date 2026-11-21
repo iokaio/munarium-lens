@@ -59,8 +59,9 @@ lists every refusal code and the order of checks.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LENS_HOST`, `LENS_PORT` | `127.0.0.1`, `8787` | Listener address. A non-loopback host also needs the next variable. |
-| `LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK` | `0` | `1` permits a non-loopback listener. Lens has no service authentication yet; use it only inside an isolated container network. |
+| `LENS_HOST`, `LENS_PORT` | `127.0.0.1`, `8787` | Listener address. A non-loopback host needs the service bearer or the development override. |
+| `LENS_SERVICE_BEARER_FILE` | unset | Path to the pool credential, 64 lowercase hexadecimal characters with an optional final newline. Protects inference, discovery and readiness. [Service authentication](../ops/serving.md#service-authentication) |
+| `LENS_ALLOW_UNAUTHENTICATED_NON_LOOPBACK` | `0` | `1` permits an unauthenticated non-loopback listener for an isolated container network. A configured service bearer still applies. |
 | `LENS_EMBEDDING_BACKEND`, `LENS_RERANKING_BACKEND` | `disabled` | `disabled` or `reference`, and `qwen3` in a build with that feature. |
 | `LENS_EMBEDDING_ARTIFACTS`, `LENS_RERANKING_ARTIFACTS` | unset | Artifact directory of a `qwen3` stage. |
 | `LENS_EMBEDDING_MANIFEST_SHA256`, `LENS_RERANKING_MANIFEST_SHA256` | unset | Expected SHA-256 of that directory's `lens-manifest.json`. |

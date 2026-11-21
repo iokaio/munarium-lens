@@ -21,11 +21,11 @@ instructions or vector interpretation gets a distinct identity. Key caches,
 readiness, enrollment and routing by the full approved binding. A new embedding
 identity requires a new compatible index.
 
-1. Run the importer under explicit operator authorization, from local assets or
-   a separately authorized verified fetch. Check license and pins, constrain
-   paths under a staging directory, reject unexpected files, symlinks and
-   path traversal, verify size and SHA-256, then atomically publish a read-only
-   non-overwriting installation on the same filesystem.
+1. Run the [offline importer](../../README.md#importing-a-downloaded-bundle-offline)
+   on local assets or use the verified fetch. Check license and pins. The
+   importer stages only listed regular files, verifies size and SHA-256, and
+   publishes a complete installation on the same filesystem. Give the
+   serving identity read access and mount the installation read-only.
 2. Serve with the imported mount, outbound network denied and model downloads
    disabled, or with the opt-in startup fetch described below. Validate the configured manifest and all referenced bytes before
    loading. Keep the mount read-only for the life of the process to prevent

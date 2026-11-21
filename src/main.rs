@@ -4,10 +4,42 @@ use tokio::net::TcpListener;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
-    if args.next().is_some_and(|first| first == "fetch") {
-        std::process::exit(fetch(args.collect()));
+    match args.next() {
+        Some(first) if first == "fetch" => std::process::exit(fetch(args.collect())),
+        Some(first) if first == "import" => std::process::exit(import(args.collect())),
+        _ => serve(),
     }
-    serve()
+}
+
+#[cfg(feature = "fetch")]
+fn import(args: Vec<std::ffi::OsString>) -> i32 {
+    use std::path::Path;
+    let [source, cache, digest] = args.as_slice() else {
+        eprintln!(
+            "usage: munarium-lens import <source-directory> <cache-directory> <manifest-sha256>"
+        );
+        return 2;
+    };
+    let Some(digest) = digest.to_str() else {
+        eprintln!("manifest-sha256 must be a lowercase hex SHA-256");
+        return 2;
+    };
+    match munarium_lens::fetch::import_bundle(Path::new(source), Path::new(cache), digest) {
+        Ok(()) => {
+            println!("{digest}");
+            0
+        }
+        Err(error) => {
+            eprintln!("Lens import failed: {error}");
+            1
+        }
+    }
+}
+
+#[cfg(not(feature = "fetch"))]
+fn import(_: Vec<std::ffi::OsString>) -> i32 {
+    eprintln!("this build has no bundle importer; rebuild with the `fetch` cargo feature");
+    2
 }
 
 /// `munarium-lens fetch`: download and verify a pinned bundle, then exit.

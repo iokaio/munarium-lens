@@ -6,7 +6,8 @@ adapted from [Munarium](https://github.com/iokaio/munarium). The
 the conduct policy's upstream source.
 
 Cargo resolves the dependencies listed in [Cargo.lock](Cargo.lock). The
-direct dependencies are Axum (MIT), Serde (MIT OR Apache-2.0) and Tokio (MIT).
+direct dependencies are Axum (MIT), Serde (MIT OR Apache-2.0), subtle
+(BSD-3-Clause) and Tokio (MIT).
 The tests also use serde_json (MIT OR Apache-2.0), which Axum already
 brings into the graph. Upstream crate notices apply to downloaded sources.
 The repository ships synthetic fixtures and no dependency source archive or
@@ -30,7 +31,8 @@ The optional `fetch` cargo feature, off by default, adds `ureq` and
 BoringSSL-derived code under the terms in its license files),
 `webpki-roots` (CDLA-Permissive-2.0: Mozilla's CA root certificates compiled
 in as data), `untrusted` (ISC), `subtle` (BSD-3-Clause) and further MIT OR
-Apache-2.0 crates, with `serde_json` and `sha2` as normal dependencies. A
+Apache-2.0 crates, with `serde_json` and `sha2` as normal dependencies. The
+offline importer uses `tempfile` (MIT OR Apache-2.0) for its staging directory. A
 binary or image built with `fetch` needs notices generated from that graph,
 including the `ring` and `webpki-roots` license texts. The fetcher downloads
 model bundles from the Munarium distribution locations at run time; the

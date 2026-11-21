@@ -5,7 +5,9 @@ qualified.** This page describes how Lens serves the accepted pair,
 Qwen3-Embedding-0.6B and Qwen3-Reranker-0.6B, on the accepted Candle runtime.
 See the [model runtime page](model-runtime.md) and the [decision register](decisions.md).
 The default build and the released image remain reference-only. LENS-2
-qualification, service authentication and the importer are still pending.
+qualification is pending. The
+[offline importer](../../README.md#importing-a-downloaded-bundle-offline)
+and [service bearer](../ops/serving.md#service-authentication) are available for review.
 
 ## Build
 

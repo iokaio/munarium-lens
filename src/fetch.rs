@@ -753,6 +753,87 @@ pub fn fetch_bundle(
     })
 }
 
+/// Import a local pinned bundle into an operator-owned cache without network
+/// access. Publish the verified directory atomically, or reuse the identical
+/// existing bundle. An existing invalid directory requires operator attention.
+pub fn import_bundle(source: &Path, cache: &Path, digest: &str) -> Result<(), FetchError> {
+    let digest = parse_sha256(digest).ok_or(FetchError::InvalidPin)?;
+    let source = fs::canonicalize(source).map_err(|_| FetchError::SourceUnavailable)?;
+    let manifest_bytes = manifest::read_regular(&source.join(MANIFEST_FILE), MAX_MANIFEST_BYTES)
+        .ok_or(FetchError::ManifestRejected("manifest_unreadable"))?;
+    let listing = manifest::parse(&manifest_bytes, &digest)
+        .map_err(|error| FetchError::ManifestRejected(error.category()))?;
+    let bundle = listing.served_model();
+    if !valid_bundle_name(bundle) {
+        return Err(FetchError::InvalidPin);
+    }
+    let cache = std::path::absolute(cache).map_err(|_| FetchError::WriteFailed)?;
+    if in_source_tree(&cache) {
+        return Err(FetchError::CacheInSourceTree);
+    }
+    fs::create_dir_all(&cache).map_err(|_| FetchError::WriteFailed)?;
+    let cache = fs::canonicalize(cache).map_err(|_| FetchError::WriteFailed)?;
+    if in_source_tree(&cache) {
+        return Err(FetchError::CacheInSourceTree);
+    }
+    let target = cache.join(bundle);
+    let check_existing = || {
+        if !fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            return Err(FetchError::WriteFailed);
+        }
+        manifest::verify_files(&target, &digest)
+            .map_err(|error| FetchError::VerifyFailed(error.category()))?;
+        Ok(())
+    };
+    if fs::symlink_metadata(&target).is_ok() {
+        return check_existing();
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".lens-import-")
+        .tempdir_in(&cache)
+        .map_err(|_| FetchError::WriteFailed)?;
+    let timeout = crate::config::DEFAULT_FILE_TIMEOUT;
+    for record in &listing.files {
+        let input = source.join(&record.path);
+        if !fs::symlink_metadata(&input).is_ok_and(|metadata| metadata.file_type().is_file()) {
+            return Err(FetchError::SourceUnavailable);
+        }
+        let input = fs::canonicalize(input).map_err(|_| FetchError::SourceUnavailable)?;
+        if !input.starts_with(&source) {
+            return Err(FetchError::SourceUnavailable);
+        }
+        let file = fs::File::open(input).map_err(|_| FetchError::SourceUnavailable)?;
+        let staged = staging.path().join(&record.path);
+        fs::create_dir_all(staged.parent().ok_or(FetchError::WriteFailed)?)
+            .map_err(|_| FetchError::WriteFailed)?;
+        write_verified(
+            &staged,
+            file,
+            record.size,
+            &record.sha256,
+            Instant::now() + timeout,
+        )?;
+    }
+    write_verified(
+        &staging.path().join(MANIFEST_FILE),
+        manifest_bytes.as_slice(),
+        manifest_bytes.len() as u64,
+        &digest,
+        Instant::now() + timeout,
+    )?;
+    match fs::rename(staging.path(), &target) {
+        Ok(()) => {
+            #[cfg(unix)]
+            fs::File::open(&cache)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| FetchError::WriteFailed)?;
+            Ok(())
+        }
+        Err(_) if fs::symlink_metadata(&target).is_ok() => check_existing(),
+        Err(_) => Err(FetchError::WriteFailed),
+    }
+}
+
 /// Arguments of `munarium-lens fetch`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchCommand {
@@ -1890,6 +1971,32 @@ pub(crate) mod tests {
         let outcome = fetch(&cache, &bundle.pin()).unwrap();
         assert_eq!((outcome.fetched, outcome.reused), (0, 3));
         assert_eq!(requests(), before);
+    }
+
+    #[test]
+    fn offline_import_publishes_complete_bundles_without_replacing_existing_content() {
+        let bundle = sample();
+        let source = Scratch::new();
+        let cache = Scratch::new();
+        fs::write(source.0.join(MANIFEST_FILE), &bundle.manifest).unwrap();
+        let digest = hex(&bundle.pin().manifest_sha256);
+        let target = cache.0.join(BUNDLE);
+        assert!(import_bundle(&source.0, &cache.0, &digest).is_err());
+        assert!(fs::read_dir(&cache.0).unwrap().next().is_none());
+
+        for (path, bytes) in &bundle.files {
+            fs::write(source.0.join(path), bytes).unwrap();
+        }
+        fs::write(source.0.join("unlisted.fixture"), b"excluded").unwrap();
+        let before = requests();
+        import_bundle(&source.0, &cache.0, &digest).unwrap();
+        import_bundle(&source.0, &cache.0, &digest).unwrap();
+        assert_eq!(requests(), before);
+        assert!(!target.join("unlisted.fixture").exists());
+        let one = target.join(&bundle.files[0].0);
+        fs::write(&one, b"invalid existing bytes").unwrap();
+        assert!(import_bundle(&source.0, &cache.0, &digest).is_err());
+        assert_eq!(fs::read(one).unwrap(), b"invalid existing bytes");
     }
 
     #[test]

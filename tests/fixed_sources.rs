@@ -38,6 +38,7 @@ const READ: &[&str] = &[
     "LENS_RERANKING_BUNDLE",
     "LENS_RERANKING_BUNDLE_REVISION",
     "LENS_RERANKING_MANIFEST_SHA256",
+    "LENS_SERVICE_BEARER_FILE",
 ];
 
 /// The standard proxy variables, read only when a stage sets a bundle. A

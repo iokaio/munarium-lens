@@ -4,16 +4,15 @@ Munarium Lens is the planned self-hosted embedding and passage reranking endpoin
 for [Munarium Server](https://github.com/iokaio/munarium). It will let operators
 place retrieval inference on their own hardware and size it independently of Server.
 
-**Status — LENS-0 scaffold verified. LENS-1: reference backend ready; model
-backend in progress.** The Rust service serves readiness, model discovery,
-embeddings and reranking with request limits and typed refusals. Its only
-backend is a deterministic reference implementation for tests and protocol
-checks. It is **not a retrieval model**. On 20 November 2026 the maintainer
-accepted Qwen3-Embedding-0.6B with Qwen3-Reranker-0.6B at 1,024 dimensions,
-with instruction prefixes owned by Server, and confirmed
-[Candle](docs/design/model-runtime.md) as the runtime. The model backend is not
-yet qualified, so LENS-1 is not complete. Both stages are disabled and the
-listener is loopback-only by default.
+**Status — LENS-0 scaffold verified. LENS-1 model serving is available for
+qualification.** The Rust service serves readiness, model discovery,
+embeddings and reranking with request limits and typed refusals. The default
+build includes the deterministic reference backend for tests and protocol
+checks. The opt-in `qwen3` build serves Qwen3-Embedding-0.6B at 1,024 dimensions
+and Qwen3-Reranker-0.6B on [Candle CPU](docs/design/model-runtime.md), with
+instruction prefixes owned by Server. The [pool bearer profile](docs/ops/serving.md#service-authentication)
+is available for review. Both stages are disabled and the listener is
+loopback-only by default.
 The tests need no model weights, GPU, credentials or Server.
 
 ```sh
@@ -260,6 +259,21 @@ sha256sum /srv/lens/qwen3-embedding-0.6b-f32-1024d/lens-manifest.json
 
 Then set `LENS_EMBEDDING_ARTIFACTS=/srv/lens/qwen3-embedding-0.6b-f32-1024d` and
 `LENS_EMBEDDING_MANIFEST_SHA256=<digest>`, and mount the directory read-only.
+
+### Importing a downloaded bundle offline
+
+A build with `fetch` can install a local bundle into an operator-managed
+cache. Use the manifest digest from the [published bundle record](docs/design/model-runtime.md#published-bundles).
+
+```sh
+munarium-lens import /media/bundle /srv/lens <manifest-sha256>
+```
+
+The importer verifies the manifest and each listed file, then publishes
+`/srv/lens/<served_model>` with a directory rename on the same filesystem.
+An identical installation is reused. A conflicting installation is left in
+place and the command fails. Mount the verified directory read-only for
+serving and configure the corresponding `LENS_*_ARTIFACTS` and digest.
 
 ### Publishing a bundle
 

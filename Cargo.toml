@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 serde = { version = "=1.0.229", features = ["derive"] }
+subtle = { version = "=2.6.1", default-features = false }
 tokio = { version = "=1.53.3", features = ["macros", "net", "rt", "signal", "sync", "time"] }
 
 # Optional `qwen3` backend: pure-Rust CPU inference with Candle. Off by default
@@ -27,11 +28,12 @@ tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy
 # HTTP/1.1 client on rustls with the ring provider and the compiled-in
 # webpki-roots trust store; no OpenSSL, no compression, no JSON layer.
 ureq = { version = "=3.5.2", default-features = false, features = ["rustls"], optional = true }
+tempfile = { version = "=3.27.0", optional = true }
 
 [features]
 default = []
 qwen3 = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:serde_json", "dep:sha2", "dep:tokenizers"]
-fetch = ["dep:serde_json", "dep:sha2", "dep:ureq"]
+fetch = ["dep:serde_json", "dep:sha2", "dep:tempfile", "dep:ureq"]
 
 [dev-dependencies]
 serde_json = "=1.0.154"

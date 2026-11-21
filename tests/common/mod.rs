@@ -14,6 +14,16 @@ pub struct Reply {
 }
 
 pub async fn request(addr: SocketAddr, method: &str, path: &str, json: Option<&str>) -> Reply {
+    request_with_headers(addr, method, path, json, &[]).await
+}
+
+pub async fn request_with_headers(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    json: Option<&str>,
+    headers: &[(&str, &str)],
+) -> Reply {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     if let Some(body) = json {
@@ -21,6 +31,9 @@ pub async fn request(addr: SocketAddr, method: &str, path: &str, json: Option<&s
             "Content-Type: application/json\r\nContent-Length: {}\r\n",
             body.len()
         ));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str("\r\n");
     stream.write_all(head.as_bytes()).await.unwrap();
